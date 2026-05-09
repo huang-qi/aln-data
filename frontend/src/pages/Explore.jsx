@@ -378,8 +378,6 @@ function Inspector({
                 fields={fields}
                 value={yFields}
                 onChange={setYFields}
-                discouragedSections={['categorical']}
-                discouragedHint="类别字段不适合做 Y"
               />
               {violinXWarning && (
                 <div className="explore-warn">⚠ {violinXWarning}</div>

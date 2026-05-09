@@ -223,6 +223,31 @@ def fields_metadata() -> dict[str, Any]:
             },
             {"name": "pf", "label": "Pass/Fail", "values": ["Y", "N"]},
             {"name": "folder_name", "label": "端口", "values": ["S11", "S22"]},
+            {
+                "name": "original_filename",
+                "label": "原始文件名",
+                "values_endpoint": "/api/query/distinct?field=original_filename",
+            },
+            {
+                "name": "display_name",
+                "label": "展示名",
+                "values_endpoint": "/api/query/distinct?field=display_name",
+            },
+            {
+                "name": "mark",
+                "label": "代号",
+                "values_endpoint": "/api/query/distinct?field=mark",
+            },
+            {
+                "name": "coord",
+                "label": "坐标",
+                "values_endpoint": "/api/query/distinct?field=coord",
+            },
+            {
+                "name": "area_n",
+                "label": "Area 编号",
+                "values_endpoint": "/api/query/distinct?field=area_n",
+            },
         ],
         "geometric": [
             {"name": "x", "label": "X 坐标"},
@@ -253,5 +278,11 @@ def fields_metadata() -> dict[str, Any]:
             {"name": "eg", "label": "EG"},
             {"name": "fl", "label": "FL"},
             {"name": "ag", "label": "AG"},
+            {
+                "name": "area_um2",
+                "label": "Area",
+                "unit": "μm²",
+                "values_endpoint": "/api/query/distinct?field=area_um2",
+            },
         ],
     }

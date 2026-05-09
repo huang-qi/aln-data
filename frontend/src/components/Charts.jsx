@@ -700,13 +700,16 @@ function buildScatterTraces({ rows, xField, yField, zField, axisRef, useGl, zCat
   const xref = `x${axisRef}`;
   const yref = `y${axisRef}`;
   const xIsCat = !!xField.isCategorical;
+  const yIsCat = !!yField.isCategorical;
+  // scattergl does not work cleanly when either axis is categorical → use SVG.
+  const wantGl = useGl && !xIsCat && !yIsCat;
   const traces = [];
 
   if (zField && !zField.isCategorical) {
     // Numeric Z → single trace, marker.color encodes Z. Show only one
     // shared colorbar (the caller decides which cell does so).
     traces.push({
-      type: useGl && !xIsCat ? 'scattergl' : 'scatter',
+      type: wantGl ? 'scattergl' : 'scatter',
       mode: 'markers',
       x: rows.map((d) => d[xKey]),
       y: rows.map((d) => d[yKey]),
@@ -735,7 +738,7 @@ function buildScatterTraces({ rows, xField, yField, zField, axisRef, useGl, zCat
     for (const zv of zVals) {
       const grp = rows.filter((r) => r[zKey] === zv);
       traces.push({
-        type: useGl && !xIsCat ? 'scattergl' : 'scatter',
+        type: wantGl ? 'scattergl' : 'scatter',
         mode: 'markers',
         x: grp.map((d) => d[xKey]),
         y: grp.map((d) => d[yKey]),
@@ -745,10 +748,10 @@ function buildScatterTraces({ rows, xField, yField, zField, axisRef, useGl, zCat
         legendgroup: String(zv),
         showlegend: showLegend,
         marker: {
-          size: xIsCat ? 6 : 5,
+          size: (xIsCat || yIsCat) ? 6 : 5,
           color: PALETTE[i % PALETTE.length],
           opacity: 0.78,
-          line: xIsCat ? { width: 0.5, color: '#ffffff80' } : undefined,
+          line: (xIsCat || yIsCat) ? { width: 0.5, color: '#ffffff80' } : undefined,
         },
         hovertemplate: `<b>%{x}</b>, %{y}<extra>${zv}</extra>`,
       });
@@ -757,7 +760,7 @@ function buildScatterTraces({ rows, xField, yField, zField, axisRef, useGl, zCat
   } else {
     // Single trace, single color.
     traces.push({
-      type: useGl && !xIsCat ? 'scattergl' : 'scatter',
+      type: wantGl ? 'scattergl' : 'scatter',
       mode: 'markers',
       x: rows.map((d) => d[xKey]),
       y: rows.map((d) => d[yKey]),
@@ -765,7 +768,7 @@ function buildScatterTraces({ rows, xField, yField, zField, axisRef, useGl, zCat
       yaxis: yref,
       name: 'all',
       showlegend: false,
-      marker: { size: 5, color: PALETTE[0], opacity: 0.78 },
+      marker: { size: (xIsCat || yIsCat) ? 6 : 5, color: PALETTE[0], opacity: 0.78 },
       hovertemplate: `<b>%{x}</b>, %{y}<extra></extra>`,
     });
   }
@@ -773,12 +776,66 @@ function buildScatterTraces({ rows, xField, yField, zField, axisRef, useGl, zCat
 }
 
 // Box plot for one cell.
+//
+// Standard (Y numeric): vertical boxes, one per X category (or per Z if zField).
+// Y categorical:        horizontal boxes (orientation 'h'), one per Y category;
+//                       distribution along X (numeric). If zField categorical,
+//                       split each Y row by Z (boxmode 'group').
 function buildBoxTraces({ rows, xField, yField, zField, axisRef, zCategoryValues, showLegend }) {
   const xKey = xField.name;
   const yKey = yField.name;
   const xref = `x${axisRef}`;
   const yref = `y${axisRef}`;
+  const yIsCat = !!yField.isCategorical;
   const traces = [];
+
+  if (yIsCat) {
+    // Horizontal box: y is the category, x is the numeric value.
+    if (zField && zField.isCategorical) {
+      const zKey = zField.name;
+      const zVals = zCategoryValues || distinctSortedValues(rows, zKey);
+      let i = 0;
+      for (const zv of zVals) {
+        const grp = rows.filter((r) => r[zKey] === zv);
+        traces.push({
+          type: 'box',
+          orientation: 'h',
+          x: grp.map((d) => d[xKey]),
+          y: grp.map((d) => d[yKey]),
+          xaxis: xref,
+          yaxis: yref,
+          name: String(zv),
+          legendgroup: String(zv),
+          showlegend: showLegend,
+          marker: { color: PALETTE[i % PALETTE.length] },
+          boxpoints: 'outliers',
+        });
+        i++;
+      }
+    } else {
+      // One horizontal box per Y category.
+      const yGroups = groupBy(rows, yKey);
+      const ykeys = sortKeys(yGroups.keys());
+      let i = 0;
+      for (const yk of ykeys) {
+        const grp = yGroups.get(yk);
+        traces.push({
+          type: 'box',
+          orientation: 'h',
+          x: grp.map((d) => d[xKey]),
+          y: grp.map(() => yk),
+          xaxis: xref,
+          yaxis: yref,
+          name: String(yk),
+          showlegend: false,
+          marker: { color: PALETTE[i % PALETTE.length] },
+          boxpoints: 'outliers',
+        });
+        i++;
+      }
+    }
+    return traces;
+  }
 
   if (zField && zField.isCategorical) {
     const zKey = zField.name;
@@ -824,13 +881,72 @@ function buildBoxTraces({ rows, xField, yField, zField, axisRef, zCategoryValues
   return traces;
 }
 
-// Violin plot for one cell.
+// Violin plot for one cell. Y categorical → horizontal violin (one per Y).
 function buildViolinTraces({ rows, xField, yField, zField, axisRef, zCategoryValues, showLegend }) {
   const xKey = xField.name;
   const yKey = yField.name;
   const xref = `x${axisRef}`;
   const yref = `y${axisRef}`;
+  const yIsCat = !!yField.isCategorical;
   const traces = [];
+
+  if (yIsCat) {
+    if (zField && zField.isCategorical) {
+      const zKey = zField.name;
+      const zVals = zCategoryValues || distinctSortedValues(rows, zKey);
+      let i = 0;
+      for (const zv of zVals) {
+        const grp = rows.filter((r) => r[zKey] === zv);
+        const c = PALETTE[i % PALETTE.length];
+        traces.push({
+          type: 'violin',
+          orientation: 'h',
+          x: grp.map((d) => d[xKey]),
+          y: grp.map((d) => d[yKey]),
+          xaxis: xref,
+          yaxis: yref,
+          name: String(zv),
+          legendgroup: String(zv),
+          showlegend: showLegend,
+          box: { visible: true },
+          meanline: { visible: true },
+          points: 'outliers',
+          marker: { color: c, opacity: 0.8 },
+          line: { color: c, width: 1 },
+          fillcolor: c + '50',
+          spanmode: 'soft',
+        });
+        i++;
+      }
+    } else {
+      const yGroups = groupBy(rows, yKey);
+      const ykeys = sortKeys(yGroups.keys());
+      let i = 0;
+      for (const yk of ykeys) {
+        const grp = yGroups.get(yk);
+        const c = PALETTE[i % PALETTE.length];
+        traces.push({
+          type: 'violin',
+          orientation: 'h',
+          x: grp.map((d) => d[xKey]),
+          y: grp.map(() => yk),
+          xaxis: xref,
+          yaxis: yref,
+          name: String(yk),
+          showlegend: false,
+          box: { visible: true },
+          meanline: { visible: true },
+          points: 'outliers',
+          marker: { color: c, opacity: 0.8 },
+          line: { color: c, width: 1 },
+          fillcolor: c + '50',
+          spanmode: 'soft',
+        });
+        i++;
+      }
+    }
+    return traces;
+  }
 
   if (zField && zField.isCategorical) {
     const zKey = zField.name;
@@ -888,12 +1004,15 @@ function buildViolinTraces({ rows, xField, yField, zField, axisRef, zCategoryVal
 }
 
 // Line plot for one cell. Within each Z group, points are sorted by X.
+// If Y is categorical, lines have no real meaning → fall back to markers only.
 function buildLineTraces({ rows, xField, yField, zField, axisRef, zCategoryValues, showLegend }) {
   const xKey = xField.name;
   const yKey = yField.name;
   const xref = `x${axisRef}`;
   const yref = `y${axisRef}`;
   const xIsCat = !!xField.isCategorical;
+  const yIsCat = !!yField.isCategorical;
+  const lineMode = yIsCat ? 'markers' : 'lines+markers';
   const traces = [];
 
   const sortRows = (arr) => {
@@ -915,7 +1034,7 @@ function buildLineTraces({ rows, xField, yField, zField, axisRef, zCategoryValue
       const c = PALETTE[i % PALETTE.length];
       traces.push({
         type: 'scatter',
-        mode: 'lines+markers',
+        mode: lineMode,
         x: grp.map((d) => d[xKey]),
         y: grp.map((d) => d[yKey]),
         xaxis: xref,
@@ -924,7 +1043,7 @@ function buildLineTraces({ rows, xField, yField, zField, axisRef, zCategoryValue
         legendgroup: String(zv),
         showlegend: showLegend,
         line: { color: c, width: 1.4 },
-        marker: { color: c, size: 5 },
+        marker: { color: c, size: yIsCat ? 6 : 5 },
       });
       i++;
     }
@@ -932,7 +1051,7 @@ function buildLineTraces({ rows, xField, yField, zField, axisRef, zCategoryValue
     const sorted = sortRows(rows);
     traces.push({
       type: 'scatter',
-      mode: 'lines+markers',
+      mode: lineMode,
       x: sorted.map((d) => d[xKey]),
       y: sorted.map((d) => d[yKey]),
       xaxis: xref,
@@ -940,7 +1059,7 @@ function buildLineTraces({ rows, xField, yField, zField, axisRef, zCategoryValue
       name: 'all',
       showlegend: false,
       line: { color: PALETTE[0], width: 1.4 },
-      marker: { color: PALETTE[0], size: 5 },
+      marker: { color: PALETTE[0], size: yIsCat ? 6 : 5 },
     });
   }
   return traces;
@@ -1039,28 +1158,7 @@ export function UnifiedChartGrid({
       const xAxisKey = `xaxis${sfx}`;
       const yAxisKey = `yaxis${sfx}`;
 
-      // Y categorical → unsupported, render warning annotation only.
-      if (yField.isCategorical) {
-        layout[xAxisKey] = {
-          ...baseLayout.xaxis,
-          title: { text: axisTitle(xField), font: { size: 11 } },
-          type: xField.isCategorical ? 'category' : undefined,
-        };
-        layout[yAxisKey] = {
-          ...baseLayout.yaxis,
-          title: { text: axisTitle(yField), font: { size: 11 } },
-        };
-        layout.annotations.push({
-          xref: `x${sfx} domain`,
-          yref: `y${sfx} domain`,
-          x: 0.5,
-          y: 1.08,
-          text: `<span style="color:#dc2626">${axisTitle(yField)} vs ${axisTitle(xField)} — Y 不支持类别</span>`,
-          showarrow: false,
-          font: { size: 12 },
-        });
-        continue;
-      }
+      const yIsCat = !!yField.isCategorical;
 
       // X-axis layout for this cell.
       const xLayout = {
@@ -1075,18 +1173,32 @@ export function UnifiedChartGrid({
         xLayout.categoryorder = 'array';
         xLayout.categoryarray = xCats;
       }
-      // Box / violin always treat X as category-like.
-      if ((chartType === 'box' || chartType === 'violin') && !xField.isCategorical) {
+      // Box / violin with numeric Y treat X as category-like (vertical
+      // boxes per X bin). If Y is categorical we draw horizontal boxes,
+      // so X must stay numeric.
+      if (
+        (chartType === 'box' || chartType === 'violin')
+        && !xField.isCategorical
+        && !yIsCat
+      ) {
         xLayout.type = 'category';
       }
 
       layout[xAxisKey] = xLayout;
-      layout[yAxisKey] = {
+
+      const yLayout = {
         ...baseLayout.yaxis,
         title: { text: axisTitle(yField), font: { size: 11 } },
         tickfont: { size: 10 },
         automargin: true,
       };
+      if (yIsCat) {
+        const yCats = distinctSortedValues(rows, yField.name);
+        yLayout.type = 'category';
+        yLayout.categoryorder = 'array';
+        yLayout.categoryarray = yCats;
+      }
+      layout[yAxisKey] = yLayout;
 
       // Sub-plot title.
       layout.annotations.push({
