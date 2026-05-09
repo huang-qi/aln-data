@@ -168,8 +168,12 @@ export default function Explore() {
     try {
       // ── Aggregate branch (Y/Z aggregation requested + categorical X exists)
       if (!isWafer && useAggregate) {
-        // group_by = all selected X fields (caller asked us to bucket on X).
+        // group_by = selected X fields, plus Z if Z is a categorical bucket
+        // (otherwise the per-Z lines / boxes would collapse into the X bin).
         const groupBy = xFields.slice();
+        if (zMeta && zMeta.isCategorical && !groupBy.includes(zMeta.name)) {
+          groupBy.push(zMeta.name);
+        }
         // Build metrics: one per Y/Z field that has a non-'all' aggregation.
         // Keys: { field, agg: [<wireName>] }. Categorical Y is skipped (the
         // UI never offers an agg dropdown for it, but guard here too).

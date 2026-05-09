@@ -1023,6 +1023,11 @@ function buildViolinTraces({ rows, xField, yField, zField, axisRef, zCategoryVal
 //
 // If Y is categorical, lines have no real meaning → fall back to markers only.
 //
+// When X is categorical and Y is numeric, multiple devices typically share
+// the same X tick, so we collapse rows to their mean per X tick (per Z group)
+// — matching the customer reference plot's smooth one-point-per-tick lines.
+// Without this collapse the line zigzags wildly within each X bucket.
+//
 // `xCategoryArray` (when xIsCat) gives the visual tick order; we sort by
 // indexOf into that array so the line follows the on-screen tick order.
 function buildLineTraces({ rows, xField, yField, zField, axisRef, zCategoryValues, showLegend, xCategoryArray }) {
@@ -1054,12 +1059,40 @@ function buildLineTraces({ rows, xField, yField, zField, axisRef, zCategoryValue
     });
   };
 
+  // Collapse rows to mean Y per X tick (used when X is categorical and Y is
+  // numeric — gives one point per tick, matching the reference plot).
+  const meanByX = (arr) => {
+    const acc = new Map(); // xVal → { sum, n }
+    for (const r of arr) {
+      const xv = r[xKey];
+      const yv = r[yKey];
+      if (xv === null || xv === undefined || !isNum(yv)) continue;
+      const slot = acc.get(xv) || { sum: 0, n: 0 };
+      slot.sum += yv;
+      slot.n += 1;
+      acc.set(xv, slot);
+    }
+    const cats = xCategoryArray || [];
+    const idx = (v) => {
+      const i = cats.indexOf(String(v));
+      return i < 0 ? Number.POSITIVE_INFINITY : i;
+    };
+    const out = [];
+    for (const [xv, { sum, n }] of acc) out.push({ [xKey]: xv, [yKey]: sum / n });
+    return out.sort((a, b) => idx(a[xKey]) - idx(b[xKey]));
+  };
+
+  // Build a single trace from a row subset, applying mean-per-X when
+  // appropriate.
+  const collapse = xIsCat && !yIsCat;
+  const prep = collapse ? meanByX : sortRows;
+
   if (zField && zField.isCategorical) {
     const zKey = zField.name;
     const zVals = zCategoryValues || distinctSortedValues(rows, zKey);
     let i = 0;
     for (const zv of zVals) {
-      const grp = sortRows(rows.filter((r) => r[zKey] === zv));
+      const grp = prep(rows.filter((r) => r[zKey] === zv));
       const c = PALETTE[i % PALETTE.length];
       traces.push({
         type: 'scatter',
@@ -1077,7 +1110,7 @@ function buildLineTraces({ rows, xField, yField, zField, axisRef, zCategoryValue
       i++;
     }
   } else {
-    const sorted = sortRows(rows);
+    const sorted = prep(rows);
     traces.push({
       type: 'scatter',
       mode: lineMode,
