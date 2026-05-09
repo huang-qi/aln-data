@@ -103,7 +103,9 @@ services:
       - ../frontend/dist:/usr/share/nginx/html:ro
       - /data3/aln/exports:/exports:ro
     healthcheck:
-      test: ["CMD", "wget", "-q", "--spider", "http://localhost/api/health"]
+      # rootless podman 下容器内 localhost(::1) 不通；nginx 监听 0.0.0.0:80，要走 127.0.0.1
+      # 走 nginx 自己的 /healthz（不依赖上游 api 即可探活 nginx 本身）
+      test: ["CMD-SHELL", "wget -q -O - http://127.0.0.1/healthz | grep -q ok || exit 1"]
       interval: 30s
       timeout: 5s
       retries: 3

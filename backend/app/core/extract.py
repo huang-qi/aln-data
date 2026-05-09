@@ -188,6 +188,73 @@ def calc_bodeq(
     }
 
 
+def calc_bodeq_curve(
+    s: np.ndarray,
+    freq: np.ndarray,
+    config: AlgorithmConfig | None = None,
+) -> dict[str, list]:
+    """返回完整的 BodeQ 曲线，用于现读现画。
+
+    返回：
+        {'freq_ghz': [...], 'raw': [...], 'smooth': [...], 'fitted': [...]}
+        - raw: 原始 BodeQ 数组（NaN 填充无效点）
+        - smooth: Savgol 平滑后的曲线
+        - fitted: 在峰附近 ±peak_range 点上的洛伦兹拟合曲线，其他位置为 NaN
+    """
+    cfg = config or get_algorithm_config()
+
+    bodeq_raw_arr, valid_count = _bodeq_raw_array(s, freq)
+    if valid_count < 10:
+        raise ExtractError(f"BodeQ 有效数据点不足（{valid_count} 点）")
+
+    bodeq_smooth_arr = _smooth_bodeq(bodeq_raw_arr, freq, cfg)
+    if np.all(np.isnan(bodeq_smooth_arr)):
+        raise ExtractError("平滑后的 BodeQ 数组全为 NaN")
+
+    fitted_arr = np.full_like(bodeq_smooth_arr, np.nan, dtype=float)
+
+    try:
+        max_idx = int(np.nanargmax(bodeq_smooth_arr))
+        f_peak_guess = float(freq[max_idx])
+
+        peak_range = int(len(freq) * cfg.lorentz_peak_range_ratio)
+        start_idx = max(0, max_idx - peak_range)
+        end_idx = min(len(freq), max_idx + peak_range)
+
+        fit_freq = freq[start_idx:end_idx]
+        fit_bodeq = bodeq_smooth_arr[start_idx:end_idx]
+
+        amp0 = float(np.nanmax(fit_bodeq))
+        f00 = f_peak_guess
+        gamma0 = (float(freq[-1]) - float(freq[0])) / 100.0
+
+        popt, _ = curve_fit(
+            _lorentzian,
+            fit_freq,
+            fit_bodeq,
+            p0=[amp0, f00, gamma0],
+            bounds=(
+                [0.1 * amp0, 0.9 * f00, gamma0 / 10],
+                [10 * amp0, 1.1 * f00, 10 * gamma0],
+            ),
+        )
+        amp, f0, gamma = popt
+        fitted_arr[start_idx:end_idx] = _lorentzian(fit_freq, amp, f0, gamma)
+    except Exception:
+        # 拟合失败不致命，曲线接口仍返回 raw/smooth；fitted 全 NaN 即可
+        pass
+
+    def _to_list(arr: np.ndarray) -> list:
+        return [None if (isinstance(v, float) and np.isnan(v)) else float(v) for v in arr]
+
+    return {
+        "freq_ghz": (freq / 1e9).tolist(),
+        "raw": _to_list(bodeq_raw_arr),
+        "smooth": _to_list(bodeq_smooth_arr),
+        "fitted": _to_list(fitted_arr),
+    }
+
+
 # ── 3. 相位法 Q ───────────────────────────────────────────────────────
 def calc_q_phase(
     z: np.ndarray, freq: np.ndarray, fs_idx: int, fp_idx: int

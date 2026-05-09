@@ -1,8 +1,32 @@
 import React, { useEffect, useState } from 'react';
 import { useParams, Link } from 'react-router-dom';
 import I from '../components/Icons.jsx';
-import { getBatch, listBatchDevices } from '../api/endpoints.js';
+import { getBatch, listBatchDevices, exportCsv } from '../api/endpoints.js';
 import DeviceModal from '../components/DeviceModal.jsx';
+
+// 触发浏览器下载一个 Blob
+function downloadBlob(blob, filename) {
+  const url = window.URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  window.URL.revokeObjectURL(url);
+}
+
+// 完整导出字段（覆盖 Device 表所有列 + virtual batch_no）
+const EXPORT_FIELDS = [
+  'id', 'batch_no',
+  'original_filename', 'display_name', 'mark', 'wafer', 'folder_name', 'coord', 'x', 'y',
+  'eg', 'fl', 'ag', 'pf', 'area_n', 'area_um2',
+  'fs_ghz', 'fp_ghz', 'zs_ohm', 'zp_ohm', 'qs', 'qp',
+  'qs_bodeq', 'qp_bodeq', 'dbqs', 'dbqp',
+  'bodeq_fitted', 'bodeq_smooth', 'bodeq_raw', 'fbode_ghz', 'k2eff_pct',
+  'fp2_ghz', 'fs2_ghz', 'zp2_ohm', 'zs2_ohm',
+  'deembedded', 's_param_path',
+];
 
 export default function BatchDetail() {
   const { batchNo } = useParams();
@@ -14,6 +38,7 @@ export default function BatchDetail() {
   const [pfFilter, setPfFilter] = useState('');
   const [error, setError] = useState(null);
   const [activeDevice, setActiveDevice] = useState(null);
+  const [exporting, setExporting] = useState(false);
 
   useEffect(() => {
     getBatch(batchNo)
@@ -32,6 +57,25 @@ export default function BatchDetail() {
 
   const items = devices.items || [];
 
+  const onExportCsv = async () => {
+    setExporting(true);
+    setError(null);
+    try {
+      const res = await exportCsv({
+        filters: { batch_no: [batchNo] },
+        fields: EXPORT_FIELDS,
+        limit: 200000,
+        order_by: 'id',
+      });
+      const ts = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
+      downloadBlob(res.data, `${batchNo}_devices_${ts}.csv`);
+    } catch (e) {
+      setError(e.message || '导出失败');
+    } finally {
+      setExporting(false);
+    }
+  };
+
   return (
     <>
       <div className="toolbar">
@@ -42,6 +86,12 @@ export default function BatchDetail() {
           <span style={{ color: 'var(--fg-4)' }}>›</span> <b>{batchNo}</b>
         </span>
         <div className="spacer" />
+        <button className="btn" onClick={onExportCsv} disabled={exporting} title="导出当前批次全部 devices 为 CSV">
+          <I.download size={13} /> {exporting ? '导出中…' : '导出 CSV'}
+        </button>
+        <button className="btn" disabled title="敬请期待">
+          <I.download size={13} /> 导出 Excel
+        </button>
       </div>
 
       <div style={{ flex: 1, overflow: 'auto', padding: 14 }}>

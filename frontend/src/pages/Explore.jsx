@@ -2,8 +2,32 @@ import React, { useEffect, useMemo, useState } from 'react';
 import I from '../components/Icons.jsx';
 import { ScatterPlot, BoxPlot } from '../components/Charts.jsx';
 import useFields, { displayLabel } from '../hooks/useFields.js';
-import { queryDevices, queryAggregate } from '../api/endpoints.js';
+import { queryDevices, queryAggregate, exportCsv } from '../api/endpoints.js';
 import DeviceModal from '../components/DeviceModal.jsx';
+
+// 触发浏览器下载一个 Blob
+function downloadBlob(blob, filename) {
+  const url = window.URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  window.URL.revokeObjectURL(url);
+}
+
+// 完整导出字段（覆盖 Device 表所有列 + virtual batch_no）
+const EXPORT_FIELDS = [
+  'id', 'batch_no',
+  'original_filename', 'display_name', 'mark', 'wafer', 'folder_name', 'coord', 'x', 'y',
+  'eg', 'fl', 'ag', 'pf', 'area_n', 'area_um2',
+  'fs_ghz', 'fp_ghz', 'zs_ohm', 'zp_ohm', 'qs', 'qp',
+  'qs_bodeq', 'qp_bodeq', 'dbqs', 'dbqp',
+  'bodeq_fitted', 'bodeq_smooth', 'bodeq_raw', 'fbode_ghz', 'k2eff_pct',
+  'fp2_ghz', 'fs2_ghz', 'zp2_ohm', 'zs2_ohm',
+  'deembedded', 's_param_path',
+];
 
 export default function Explore() {
   const { data: fields, loading: fLoading, error: fErr } = useFields();
@@ -18,6 +42,7 @@ export default function Explore() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
   const [activeDevice, setActiveDevice] = useState(null);
+  const [exporting, setExporting] = useState(false);
 
   const numericFields = fields?.numeric || [];
   const allFields = fields?.all || [];
@@ -51,6 +76,25 @@ export default function Explore() {
   const xLabel = xField ? displayLabel(xField) : xKey;
   const yLabel = yField ? displayLabel(yField) : yKey;
 
+  const onExportCsv = async () => {
+    setExporting(true);
+    setError(null);
+    try {
+      const res = await exportCsv({
+        filters,
+        fields: EXPORT_FIELDS,
+        limit: 200000,
+        order_by: 'id',
+      });
+      const ts = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
+      downloadBlob(res.data, `devices_${ts}.csv`);
+    } catch (e) {
+      setError(e.message || '导出失败');
+    } finally {
+      setExporting(false);
+    }
+  };
+
   return (
     <>
       <div className="toolbar">
@@ -67,6 +111,12 @@ export default function Explore() {
           </button>
         </div>
         <div className="spacer" />
+        <button className="btn" onClick={onExportCsv} disabled={exporting} title="按当前筛选条件导出为 CSV">
+          <I.download size={13} /> {exporting ? '导出中…' : '导出 CSV'}
+        </button>
+        <button className="btn" disabled title="敬请期待">
+          <I.download size={13} /> 导出 Excel
+        </button>
         <button className="btn primary" onClick={run} disabled={loading || fLoading}>
           <I.refresh size={13} /> {loading ? '查询中...' : '运行查询'}
         </button>

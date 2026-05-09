@@ -103,17 +103,32 @@ export function BoxPlot({ rows, groupKey, valueKey, valueLabel }) {
   );
 }
 
-export function LineChart({ x, y, xLabel, yLabel, name, color, markers = [] }) {
-  const traces = [
-    {
-      type: 'scatter',
-      mode: 'lines',
-      x,
-      y,
-      name: name || 'trace',
-      line: { color: color || PALETTE[0], width: 1.4 },
-    },
-  ];
+export function LineChart({ x, y, xLabel, yLabel, name, color, markers = [], series, showLegend }) {
+  const traces = series && series.length
+    ? series.map((s, i) => ({
+        type: 'scatter',
+        mode: 'lines',
+        x: s.x || x,
+        y: s.y,
+        name: s.name || `trace ${i + 1}`,
+        connectgaps: false,
+        line: {
+          color: s.color || PALETTE[i % PALETTE.length],
+          width: s.width != null ? s.width : 1.4,
+          dash: s.dash || 'solid',
+        },
+        opacity: s.opacity != null ? s.opacity : 1,
+      }))
+    : [
+        {
+          type: 'scatter',
+          mode: 'lines',
+          x,
+          y,
+          name: name || 'trace',
+          line: { color: color || PALETTE[0], width: 1.4 },
+        },
+      ];
   const shapes = markers.map((m) => ({
     type: 'line',
     x0: m.x,
@@ -134,7 +149,8 @@ export function LineChart({ x, y, xLabel, yLabel, name, color, markers = [] }) {
   }));
   const layout = {
     ...baseLayout,
-    showlegend: false,
+    showlegend: !!showLegend,
+    legend: { orientation: 'h', y: 1.08, x: 0 },
     xaxis: { ...baseLayout.xaxis, title: xLabel || 'x' },
     yaxis: { ...baseLayout.yaxis, title: yLabel || 'y' },
     shapes,

@@ -37,18 +37,28 @@ export default function DeviceModal({ device, onClose }) {
   let plotProps = null;
   if (data) {
     if (tab === 'bodeq') {
+      const freq = data.freq_ghz || [];
+      const series = [];
+      if (data.raw) {
+        series.push({ x: freq, y: data.raw, name: 'raw', color: '#94a3b8', width: 1, opacity: 0.7 });
+      }
+      if (data.smooth) {
+        series.push({ x: freq, y: data.smooth, name: 'smooth', color: '#2c79f6', width: 1.6 });
+      }
+      if (data.fitted) {
+        series.push({ x: freq, y: data.fitted, name: 'fitted', color: '#c2410c', width: 2.4 });
+      }
+      const markers = [
+        data.fs_ghz != null ? { x: data.fs_ghz, label: 'fs', color: '#0e9488' } : null,
+        data.fp_ghz != null ? { x: data.fp_ghz, label: 'fp', color: '#c97a16' } : null,
+        data.fbode_ghz != null ? { x: data.fbode_ghz, label: 'fbode', color: '#7b3fe4' } : null,
+      ].filter(Boolean);
       plotProps = {
-        x: data.freq_ghz || [],
-        y: data.values || data.smooth || [],
+        series,
+        showLegend: true,
         xLabel: 'Frequency (GHz)',
         yLabel: 'BodeQ',
-        markers:
-          data.fs_ghz != null
-            ? [
-                { x: data.fs_ghz, label: 'fs', color: '#0e9488' },
-                { x: data.fp_ghz, label: 'fp', color: '#c97a16' },
-              ].filter((m) => m.x != null)
-            : [],
+        markers,
       };
     } else {
       plotProps = {

@@ -11,6 +11,7 @@ from fastapi import APIRouter, HTTPException, Query
 
 from app.api.deps import DbSession
 from app.config import get_settings
+from app.core.extract import calc_bodeq_curve
 from app.models import Device
 
 router = APIRouter(prefix="/devices", tags=["devices"])
@@ -94,10 +95,32 @@ def device_sparam(
 
 @router.get("/{device_id}/bodeq")
 def device_bodeq(device_id: int, db: DbSession) -> dict[str, Any]:
+    """读 .s1p → 计算 BodeQ raw/smooth/fitted 三条曲线 → 返回 JSON。"""
     device = db.get(Device, device_id)
     if device is None:
         raise HTTPException(status_code=404, detail=f"器件 {device_id} 不存在")
-    raise HTTPException(
-        status_code=501,
-        detail="BodeQ 曲线接口暂未实现（待算法层暴露 compute_bodeq 现读接口）",
-    )
+    if not device.s_param_path:
+        raise HTTPException(status_code=404, detail="该器件没有 S 参数文件")
+
+    batch_no = device.batch.batch_no if device.batch else None
+    path = _resolve_sparam_path(device.s_param_path, batch_no=batch_no)
+    if not path.exists():
+        raise HTTPException(status_code=404, detail=f"S 参数文件不存在: {path}")
+
+    try:
+        net = skrf.Network(str(path))
+        s = net.s[:, 0, 0]
+        freq = net.f
+        result = calc_bodeq_curve(s, freq)
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"BodeQ 计算失败: {exc!s}") from exc
+
+    return {
+        "device_id": device_id,
+        **result,
+        "fs_ghz": device.fs_ghz,
+        "fp_ghz": device.fp_ghz,
+        "fbode_ghz": device.fbode_ghz,
+    }
