@@ -705,14 +705,20 @@ function buildScatterTraces({ rows, xField, yField, zField, axisRef, useGl, zCat
   const wantGl = useGl && !xIsCat && !yIsCat;
   const traces = [];
 
+  // When the X (or Y) axis is rendered as a category axis, stringify
+  // the trace coordinates so they match the layout's string
+  // categoryarray. Numeric axes keep their raw numeric values.
+  const mapX = xIsCat ? (d) => String(d[xKey]) : (d) => d[xKey];
+  const mapY = yIsCat ? (d) => String(d[yKey]) : (d) => d[yKey];
+
   if (zField && !zField.isCategorical) {
     // Numeric Z → single trace, marker.color encodes Z. Show only one
     // shared colorbar (the caller decides which cell does so).
     traces.push({
       type: wantGl ? 'scattergl' : 'scatter',
       mode: 'markers',
-      x: rows.map((d) => d[xKey]),
-      y: rows.map((d) => d[yKey]),
+      x: rows.map(mapX),
+      y: rows.map(mapY),
       xaxis: xref,
       yaxis: yref,
       marker: {
@@ -740,8 +746,8 @@ function buildScatterTraces({ rows, xField, yField, zField, axisRef, useGl, zCat
       traces.push({
         type: wantGl ? 'scattergl' : 'scatter',
         mode: 'markers',
-        x: grp.map((d) => d[xKey]),
-        y: grp.map((d) => d[yKey]),
+        x: grp.map(mapX),
+        y: grp.map(mapY),
         xaxis: xref,
         yaxis: yref,
         name: String(zv),
@@ -762,8 +768,8 @@ function buildScatterTraces({ rows, xField, yField, zField, axisRef, useGl, zCat
     traces.push({
       type: wantGl ? 'scattergl' : 'scatter',
       mode: 'markers',
-      x: rows.map((d) => d[xKey]),
-      y: rows.map((d) => d[yKey]),
+      x: rows.map(mapX),
+      y: rows.map(mapY),
       xaxis: xref,
       yaxis: yref,
       name: 'all',
@@ -801,7 +807,7 @@ function buildBoxTraces({ rows, xField, yField, zField, axisRef, zCategoryValues
           type: 'box',
           orientation: 'h',
           x: grp.map((d) => d[xKey]),
-          y: grp.map((d) => d[yKey]),
+          y: grp.map((d) => String(d[yKey])),
           xaxis: xref,
           yaxis: yref,
           name: String(zv),
@@ -813,26 +819,21 @@ function buildBoxTraces({ rows, xField, yField, zField, axisRef, zCategoryValues
         i++;
       }
     } else {
-      // One horizontal box per Y category.
-      const yGroups = groupBy(rows, yKey);
-      const ykeys = sortKeys(yGroups.keys());
-      let i = 0;
-      for (const yk of ykeys) {
-        const grp = yGroups.get(yk);
-        traces.push({
-          type: 'box',
-          orientation: 'h',
-          x: grp.map((d) => d[xKey]),
-          y: grp.map(() => yk),
-          xaxis: xref,
-          yaxis: yref,
-          name: String(yk),
-          showlegend: false,
-          marker: { color: PALETTE[i % PALETTE.length] },
-          boxpoints: 'outliers',
-        });
-        i++;
-      }
+      // No Z grouping: one trace covering all Y categories. (One trace
+      // per Y combined with boxmode='group' would offset each box off
+      // its tick.)
+      traces.push({
+        type: 'box',
+        orientation: 'h',
+        x: rows.map((d) => d[xKey]),
+        y: rows.map((d) => String(d[yKey])),
+        xaxis: xref,
+        yaxis: yref,
+        name: axisTitle(xField),
+        showlegend: false,
+        marker: { color: PALETTE[0] },
+        boxpoints: 'outliers',
+      });
     }
     return traces;
   }
@@ -845,7 +846,7 @@ function buildBoxTraces({ rows, xField, yField, zField, axisRef, zCategoryValues
       const grp = rows.filter((r) => r[zKey] === zv);
       traces.push({
         type: 'box',
-        x: grp.map((d) => d[xKey]),
+        x: grp.map((d) => String(d[xKey])),
         y: grp.map((d) => d[yKey]),
         xaxis: xref,
         yaxis: yref,
@@ -858,25 +859,22 @@ function buildBoxTraces({ rows, xField, yField, zField, axisRef, zCategoryValues
       i++;
     }
   } else {
-    // Group rows by X value.
-    const xGroups = groupBy(rows, xKey);
-    const xkeys = sortKeys(xGroups.keys());
-    let i = 0;
-    for (const xk of xkeys) {
-      const grp = xGroups.get(xk);
-      traces.push({
-        type: 'box',
-        x: grp.map(() => xk),
-        y: grp.map((d) => d[yKey]),
-        xaxis: xref,
-        yaxis: yref,
-        name: String(xk),
-        showlegend: false,
-        marker: { color: PALETTE[i % PALETTE.length] },
-        boxpoints: 'outliers',
-      });
-      i++;
-    }
+    // No Z grouping: emit a SINGLE trace with all rows. One-trace-per-X
+    // combined with boxmode='group' would offset each box into its own
+    // sub-slot inside its category, leaving the box visually shifted
+    // away from the X tick. A single trace puts each box centered on
+    // its X category.
+    traces.push({
+      type: 'box',
+      x: rows.map((d) => String(d[xKey])),
+      y: rows.map((d) => d[yKey]),
+      xaxis: xref,
+      yaxis: yref,
+      name: axisTitle(yField),
+      showlegend: false,
+      marker: { color: PALETTE[0] },
+      boxpoints: 'outliers',
+    });
   }
   return traces;
 }
@@ -902,7 +900,7 @@ function buildViolinTraces({ rows, xField, yField, zField, axisRef, zCategoryVal
           type: 'violin',
           orientation: 'h',
           x: grp.map((d) => d[xKey]),
-          y: grp.map((d) => d[yKey]),
+          y: grp.map((d) => String(d[yKey])),
           xaxis: xref,
           yaxis: yref,
           name: String(zv),
@@ -919,31 +917,26 @@ function buildViolinTraces({ rows, xField, yField, zField, axisRef, zCategoryVal
         i++;
       }
     } else {
-      const yGroups = groupBy(rows, yKey);
-      const ykeys = sortKeys(yGroups.keys());
-      let i = 0;
-      for (const yk of ykeys) {
-        const grp = yGroups.get(yk);
-        const c = PALETTE[i % PALETTE.length];
-        traces.push({
-          type: 'violin',
-          orientation: 'h',
-          x: grp.map((d) => d[xKey]),
-          y: grp.map(() => yk),
-          xaxis: xref,
-          yaxis: yref,
-          name: String(yk),
-          showlegend: false,
-          box: { visible: true },
-          meanline: { visible: true },
-          points: 'outliers',
-          marker: { color: c, opacity: 0.8 },
-          line: { color: c, width: 1 },
-          fillcolor: c + '50',
-          spanmode: 'soft',
-        });
-        i++;
-      }
+      // No Z grouping: single trace, one violin per Y category, each
+      // centered on its tick.
+      const c = PALETTE[0];
+      traces.push({
+        type: 'violin',
+        orientation: 'h',
+        x: rows.map((d) => d[xKey]),
+        y: rows.map((d) => String(d[yKey])),
+        xaxis: xref,
+        yaxis: yref,
+        name: axisTitle(xField),
+        showlegend: false,
+        box: { visible: true },
+        meanline: { visible: true },
+        points: 'outliers',
+        marker: { color: c, opacity: 0.8 },
+        line: { color: c, width: 1 },
+        fillcolor: c + '50',
+        spanmode: 'soft',
+      });
     }
     return traces;
   }
@@ -957,7 +950,7 @@ function buildViolinTraces({ rows, xField, yField, zField, axisRef, zCategoryVal
       const c = PALETTE[i % PALETTE.length];
       traces.push({
         type: 'violin',
-        x: grp.map((d) => d[xKey]),
+        x: grp.map((d) => String(d[xKey])),
         y: grp.map((d) => d[yKey]),
         xaxis: xref,
         yaxis: yref,
@@ -975,30 +968,27 @@ function buildViolinTraces({ rows, xField, yField, zField, axisRef, zCategoryVal
       i++;
     }
   } else {
-    const xGroups = groupBy(rows, xKey);
-    const xkeys = sortKeys(xGroups.keys());
-    let i = 0;
-    for (const xk of xkeys) {
-      const grp = xGroups.get(xk);
-      const c = PALETTE[i % PALETTE.length];
-      traces.push({
-        type: 'violin',
-        x: grp.map(() => xk),
-        y: grp.map((d) => d[yKey]),
-        xaxis: xref,
-        yaxis: yref,
-        name: String(xk),
-        showlegend: false,
-        box: { visible: true },
-        meanline: { visible: true },
-        points: 'outliers',
-        marker: { color: c, opacity: 0.8 },
-        line: { color: c, width: 1 },
-        fillcolor: c + '50',
-        spanmode: 'soft',
-      });
-      i++;
-    }
+    // No Z grouping: emit a SINGLE trace. One-trace-per-X combined
+    // with violinmode='group' offsets each violin into its own sub-
+    // slot inside its category, so the violin drifts away from the X
+    // tick. A single trace puts each violin centered on its tick.
+    const c = PALETTE[0];
+    traces.push({
+      type: 'violin',
+      x: rows.map((d) => String(d[xKey])),
+      y: rows.map((d) => d[yKey]),
+      xaxis: xref,
+      yaxis: yref,
+      name: axisTitle(yField),
+      showlegend: false,
+      box: { visible: true },
+      meanline: { visible: true },
+      points: 'outliers',
+      marker: { color: c, opacity: 0.8 },
+      line: { color: c, width: 1 },
+      fillcolor: c + '50',
+      spanmode: 'soft',
+    });
   }
   return traces;
 }
@@ -1167,21 +1157,16 @@ export function UnifiedChartGrid({
         tickfont: { size: 10 },
         automargin: true,
       };
-      if (xField.isCategorical) {
-        const xCats = distinctSortedValues(rows, xField.name);
+      // X-axis treated as a category axis if either:
+      //   (a) the field itself is categorical, or
+      //   (b) it's a box/violin chart with numeric Y (we bin by X tick)
+      const xAsCategory = !!xField.isCategorical
+        || ((chartType === 'box' || chartType === 'violin') && !yIsCat);
+      if (xAsCategory) {
+        const xCats = distinctSortedValues(rows, xField.name).map(String);
         xLayout.type = 'category';
         xLayout.categoryorder = 'array';
         xLayout.categoryarray = xCats;
-      }
-      // Box / violin with numeric Y treat X as category-like (vertical
-      // boxes per X bin). If Y is categorical we draw horizontal boxes,
-      // so X must stay numeric.
-      if (
-        (chartType === 'box' || chartType === 'violin')
-        && !xField.isCategorical
-        && !yIsCat
-      ) {
-        xLayout.type = 'category';
       }
 
       layout[xAxisKey] = xLayout;
@@ -1193,7 +1178,7 @@ export function UnifiedChartGrid({
         automargin: true,
       };
       if (yIsCat) {
-        const yCats = distinctSortedValues(rows, yField.name);
+        const yCats = distinctSortedValues(rows, yField.name).map(String);
         yLayout.type = 'category';
         yLayout.categoryorder = 'array';
         yLayout.categoryarray = yCats;

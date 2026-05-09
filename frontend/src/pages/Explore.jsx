@@ -2,9 +2,27 @@ import React, { useEffect, useMemo, useState } from 'react';
 import I from '../components/Icons.jsx';
 import { UnifiedChartGrid, WaferMap } from '../components/Charts.jsx';
 import useFields, { displayLabel } from '../hooks/useFields.js';
-import { queryDevices, exportCsv } from '../api/endpoints.js';
+import { queryDevices, queryAggregate, exportCsv } from '../api/endpoints.js';
 import DeviceModal from '../components/DeviceModal.jsx';
 import FilterPanel from '../components/FilterPanel.jsx';
+
+// Aggregation options for numeric Y/Z fields.
+//   'all' is a UI sentinel meaning "no aggregation, plot raw rows".
+//   The other ops map to backend AggOp values in /api/query/aggregate.
+//   'mean' is rendered as 'avg' on the wire (backend uses SQL AVG).
+const AGG_OPTIONS = [
+  { key: 'all',    label: 'ALL（不聚合）' },
+  { key: 'max',    label: 'max' },
+  { key: 'min',    label: 'min' },
+  { key: 'mean',   label: 'mean' },
+  { key: 'p50',    label: 'median (p50)' },
+  { key: 'p25',    label: 'p25' },
+  { key: 'p75',    label: 'p75' },
+];
+// Wire name sent to backend metrics[].agg.
+function aggWireName(uiKey) {
+  return uiKey === 'mean' ? 'avg' : uiKey;
+}
 
 // Trigger a browser download for a returned Blob (used by CSV export).
 function downloadBlob(blob, filename) {
@@ -82,7 +100,10 @@ export default function Explore() {
   // Persisted across chart-type switches (don't reset on chartType change).
   const [chartType, setChartType] = useState('scatter');
   const [xFields, setXFields] = useState(['fs_ghz']);
-  const [yFields, setYFields] = useState(['qs']);
+  // Y fields: list of { name, aggregation } where aggregation is one of
+  // AGG_OPTIONS keys. Default 'all' = no aggregation (plot raw rows).
+  const [yFields, setYFields] = useState([{ name: 'qs', aggregation: 'all' }]);
+  // Z field: { name, aggregation } | null. Same convention as Y.
   const [zField, setZField] = useState(null);
 
   // wafer-only state.
@@ -101,16 +122,102 @@ export default function Explore() {
 
   const isWafer = chartType === 'wafer';
 
-  // Enriched field metadata for charts.
-  const xMeta = useMemo(() => xFields.map((n) => enrichField(n, fields)).filter(Boolean), [xFields, fields]);
-  const yMeta = useMemo(() => yFields.map((n) => enrichField(n, fields)).filter(Boolean), [yFields, fields]);
-  const zMeta = useMemo(() => (zField ? enrichField(zField, fields) : null), [zField, fields]);
+  // Enriched field metadata for charts. yMeta/zMeta carry the per-field
+  // `aggregation` selected by the user (default 'all' = no aggregation).
+  const xMeta = useMemo(
+    () => xFields.map((n) => enrichField(n, fields)).filter(Boolean),
+    [xFields, fields],
+  );
+  const yMeta = useMemo(
+    () =>
+      yFields
+        .map((y) => {
+          const m = enrichField(y.name, fields);
+          return m ? { ...m, aggregation: y.aggregation || 'all' } : null;
+        })
+        .filter(Boolean),
+    [yFields, fields],
+  );
+  const zMeta = useMemo(() => {
+    if (!zField) return null;
+    const m = enrichField(zField.name, fields);
+    return m ? { ...m, aggregation: zField.aggregation || 'all' } : null;
+  }, [zField, fields]);
   const waferZMeta = useMemo(() => enrichField(waferZ, fields), [waferZ, fields]);
+
+  // Whether the current Y/Z selection requires the aggregate API.
+  const needsAggregate = useMemo(() => {
+    if (yMeta.some((f) => f.isCategorical ? false : (f.aggregation && f.aggregation !== 'all'))) return true;
+    if (zMeta && !zMeta.isCategorical && zMeta.aggregation && zMeta.aggregation !== 'all') return true;
+    return false;
+  }, [yMeta, zMeta]);
+
+  // Aggregate mode requires at least one categorical X (X is the GROUP BY key).
+  const hasCategoricalX = useMemo(() => xMeta.some((f) => f.isCategorical), [xMeta]);
+  const aggregateXWarning = useMemo(() => {
+    if (!needsAggregate) return null;
+    if (!hasCategoricalX) return '聚合模式需要至少一个类别 X 字段（已自动 fallback 为 ALL）';
+    return null;
+  }, [needsAggregate, hasCategoricalX]);
+  // If aggregate would be invalid (no categorical X) we silently fall back.
+  const useAggregate = needsAggregate && hasCategoricalX;
 
   const run = async () => {
     setLoading(true);
     setError(null);
     try {
+      // ── Aggregate branch (Y/Z aggregation requested + categorical X exists)
+      if (!isWafer && useAggregate) {
+        // group_by = all selected X fields (caller asked us to bucket on X).
+        const groupBy = xFields.slice();
+        // Build metrics: one per Y/Z field that has a non-'all' aggregation.
+        // Keys: { field, agg: [<wireName>] }. Categorical Y is skipped (the
+        // UI never offers an agg dropdown for it, but guard here too).
+        const metrics = [];
+        const aggByField = {}; // field-name -> ui-key, used during flatten
+        for (const y of yMeta) {
+          if (!y.isCategorical && y.aggregation && y.aggregation !== 'all') {
+            metrics.push({ field: y.name, agg: [aggWireName(y.aggregation)] });
+            aggByField[y.name] = aggWireName(y.aggregation);
+          }
+        }
+        if (zMeta && !zMeta.isCategorical && zMeta.aggregation && zMeta.aggregation !== 'all') {
+          // If Z field already in metrics (also a Y), don't dup.
+          if (!aggByField[zMeta.name]) {
+            metrics.push({ field: zMeta.name, agg: [aggWireName(zMeta.aggregation)] });
+            aggByField[zMeta.name] = aggWireName(zMeta.aggregation);
+          }
+        }
+        const res = await queryAggregate({ filters, group_by: groupBy, metrics });
+        // Flatten {x_field: v, qs: {avg: 1234}} → {x_field: v, qs: 1234}.
+        const flat = (res.groups || []).map((g) => {
+          const row = {};
+          for (const k of Object.keys(g)) {
+            const v = g[k];
+            if (v && typeof v === 'object' && !Array.isArray(v)) {
+              // Take the (sole) requested agg op for this field.
+              const op = aggByField[k];
+              row[k] = op != null ? v[op] : Object.values(v)[0];
+            } else {
+              row[k] = v;
+            }
+          }
+          // Inject Y fields whose aggregation is 'all' as undefined to make
+          // it visually obvious they have no per-X bucket value (Charts will
+          // show empty for that subplot — user-visible signal to switch back).
+          for (const y of yMeta) {
+            if ((y.aggregation || 'all') === 'all' && !(y.name in row)) {
+              row[y.name] = null;
+            }
+          }
+          return row;
+        });
+        setRows(flat);
+        setStats({ total: flat.length, returned: flat.length, truncated: false });
+        return;
+      }
+
+      // ── Default branch: raw rows via /api/query/devices.
       const fieldSet = new Set(['id']);
       if (isWafer) {
         ['x', 'y'].forEach((k) => fieldSet.add(k));
@@ -120,8 +227,8 @@ export default function Explore() {
         ['batch_no', 'wafer', 'folder_name', 'pf'].forEach((k) => fieldSet.add(k));
       } else {
         xFields.forEach((n) => fieldSet.add(n));
-        yFields.forEach((n) => fieldSet.add(n));
-        if (zField) fieldSet.add(zField);
+        yFields.forEach((y) => fieldSet.add(y.name));
+        if (zField) fieldSet.add(zField.name);
         // device-identification cols for the modal.
         ['batch_no', 'wafer', 'folder_name', 'coord', 'pf'].forEach((k) => fieldSet.add(k));
       }
@@ -293,6 +400,7 @@ export default function Explore() {
           xMeta={xMeta}
           yMeta={yMeta}
           violinXWarning={violinXWarning}
+          aggregateXWarning={aggregateXWarning}
           limit={limit}
           setLimit={setLimit}
           stats={stats}
@@ -318,7 +426,7 @@ function Inspector({
   zField, setZField,
   waferZ, setWaferZ,
   waferFacet, setWaferFacet,
-  xMeta, yMeta, violinXWarning,
+  xMeta, yMeta, violinXWarning, aggregateXWarning,
   limit, setLimit, stats,
 }) {
   const isWafer = chartType === 'wafer';
@@ -374,7 +482,7 @@ function Inspector({
             </div>
             <div className="section">
               <div className="section-title">Y 字段（可多选）</div>
-              <FieldCheckList
+              <FieldCheckListWithAgg
                 fields={fields}
                 value={yFields}
                 onChange={setYFields}
@@ -382,11 +490,13 @@ function Inspector({
               {violinXWarning && (
                 <div className="explore-warn">⚠ {violinXWarning}</div>
               )}
+              {aggregateXWarning && (
+                <div className="explore-warn">⚠ {aggregateXWarning}</div>
+              )}
             </div>
             <div className="section">
               <div className="section-title">颜色 / 分组（Z，单选）</div>
-              <FieldRadio
-                label=""
+              <FieldRadioWithAgg
                 hint="optional"
                 fields={fields}
                 value={zField}
@@ -394,7 +504,6 @@ function Inspector({
                 allowedSections={['categorical', 'process', 'numeric', 'geometric']}
                 allowNone={true}
                 noneLabel="不编码"
-                noneValue={null}
               />
             </div>
             <div className="explore-grid-hint">{gridText}</div>
@@ -506,6 +615,202 @@ function FieldCheckList({ fields, value, onChange, discouragedSections = [], dis
           </div>
         );
       })}
+    </div>
+  );
+}
+
+/* -------------------------------------------------------------------------
+ * FieldCheckListWithAgg — like FieldCheckList but each numeric field carries
+ * an aggregation `<select>` (ALL / max / min / mean / median / p25 / p75).
+ *
+ * value:    [{ name, aggregation }, ...]
+ * onChange: receives a new array.
+ *
+ * Categorical sections never show the dropdown — aggregation is meaningless
+ * for category labels.
+ * ----------------------------------------------------------------------- */
+function FieldCheckListWithAgg({ fields, value, onChange }) {
+  const byName = useMemo(() => {
+    const m = new Map();
+    for (const v of value) m.set(v.name, v);
+    return m;
+  }, [value]);
+  if (!fields) return <div className="dim" style={{ fontSize: 11 }}>loading…</div>;
+  const toggle = (name) => {
+    if (byName.has(name)) onChange(value.filter((v) => v.name !== name));
+    else onChange([...value, { name, aggregation: 'all' }]);
+  };
+  const setAgg = (name, agg) => {
+    onChange(value.map((v) => (v.name === name ? { ...v, aggregation: agg } : v)));
+  };
+  return (
+    <div className="explore-fieldlist">
+      {SECTION_ORDER.map((section) => {
+        const items = fields.raw?.[section] || [];
+        if (items.length === 0) return null;
+        const isCategorical = CATEGORICAL_SECTIONS.has(section);
+        return (
+          <div key={section} className="explore-fieldgroup">
+            <div className="explore-fieldgroup-head">
+              <span className="explore-fieldgroup-name">{SECTION_LABELS[section] || section}</span>
+            </div>
+            <div className="explore-fieldgroup-body">
+              {items.map((f) => {
+                const entry = byName.get(f.name);
+                const checked = !!entry;
+                return (
+                  <span
+                    key={f.name}
+                    style={{ display: 'inline-flex', alignItems: 'center', gap: 3 }}
+                  >
+                    <label
+                      className={`explore-fieldchip${checked ? ' checked' : ''}`}
+                      title={displayLabel(f)}
+                    >
+                      <input
+                        type="checkbox"
+                        checked={checked}
+                        onChange={() => toggle(f.name)}
+                        style={{ position: 'absolute', opacity: 0, pointerEvents: 'none' }}
+                      />
+                      <span className="explore-fieldchip-cb" aria-hidden>
+                        {checked && <I.check size={9} stroke="#fff" sw={2.5} />}
+                      </span>
+                      <span className="explore-fieldchip-label">{displayLabel(f)}</span>
+                    </label>
+                    {checked && !isCategorical && (
+                      <select
+                        className="input mono"
+                        value={entry.aggregation || 'all'}
+                        onChange={(e) => setAgg(f.name, e.target.value)}
+                        style={{
+                          height: 22,
+                          padding: '0 4px',
+                          fontSize: 10.5,
+                          width: 'auto',
+                          minWidth: 64,
+                        }}
+                        title="聚合方式：ALL=不聚合，其他=按 X 分组取该聚合值"
+                      >
+                        {AGG_OPTIONS.map((o) => (
+                          <option key={o.key} value={o.key}>{o.label}</option>
+                        ))}
+                      </select>
+                    )}
+                  </span>
+                );
+              })}
+            </div>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+/* -------------------------------------------------------------------------
+ * FieldRadioWithAgg — single-select Z field with aggregation dropdown for
+ * numeric picks.
+ *
+ * value:    { name, aggregation } | null
+ * onChange: receives the new value (object) or null.
+ * ----------------------------------------------------------------------- */
+function FieldRadioWithAgg({
+  hint, fields, value, onChange,
+  allowedSections, allowNone = true, noneLabel = '不编码',
+}) {
+  if (!fields) return <div className="dim" style={{ fontSize: 11 }}>loading…</div>;
+  const allowed = new Set(allowedSections);
+  const currentName = value ? value.name : null;
+  const setAgg = (agg) => {
+    if (!value) return;
+    onChange({ ...value, aggregation: agg });
+  };
+  // Look up section of currently-selected field to decide whether to show agg.
+  const currentSection = useMemo(() => {
+    if (!currentName) return null;
+    for (const s of SECTION_ORDER) {
+      if ((fields.raw?.[s] || []).some((x) => x.name === currentName)) return s;
+    }
+    return null;
+  }, [currentName, fields]);
+  const showAgg = currentName && currentSection && !CATEGORICAL_SECTIONS.has(currentSection);
+  return (
+    <div className="explore-radio">
+      {hint && (
+        <div className="field-label" style={{ marginBottom: 6 }}>
+          <span className="hint">{hint}</span>
+        </div>
+      )}
+      {showAgg && (
+        <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 6 }}>
+          <span style={{ fontSize: 10.5, color: 'var(--fg-3)' }}>聚合：</span>
+          <select
+            className="input mono"
+            value={value.aggregation || 'all'}
+            onChange={(e) => setAgg(e.target.value)}
+            style={{ height: 22, padding: '0 4px', fontSize: 10.5, minWidth: 110 }}
+          >
+            {AGG_OPTIONS.map((o) => (
+              <option key={o.key} value={o.key}>{o.label}</option>
+            ))}
+          </select>
+        </div>
+      )}
+      <div className="explore-fieldlist compact">
+        {allowNone && (
+          <div className="explore-fieldgroup">
+            <div className="explore-fieldgroup-body">
+              <label className={`explore-fieldchip${value === null ? ' checked' : ''} radio`}>
+                <input
+                  type="radio"
+                  checked={value === null}
+                  onChange={() => onChange(null)}
+                  style={{ position: 'absolute', opacity: 0, pointerEvents: 'none' }}
+                />
+                <span className="explore-fieldchip-radio" aria-hidden>
+                  {value === null && <span className="dot" />}
+                </span>
+                <span className="explore-fieldchip-label">{noneLabel}</span>
+              </label>
+            </div>
+          </div>
+        )}
+        {SECTION_ORDER.filter((s) => allowed.has(s)).map((section) => {
+          const items = fields.raw?.[section] || [];
+          if (items.length === 0) return null;
+          return (
+            <div key={section} className="explore-fieldgroup">
+              <div className="explore-fieldgroup-head">
+                <span className="explore-fieldgroup-name">{SECTION_LABELS[section] || section}</span>
+              </div>
+              <div className="explore-fieldgroup-body">
+                {items.map((f) => {
+                  const checked = currentName === f.name;
+                  return (
+                    <label
+                      key={f.name}
+                      className={`explore-fieldchip${checked ? ' checked' : ''} radio`}
+                      title={displayLabel(f)}
+                    >
+                      <input
+                        type="radio"
+                        checked={checked}
+                        onChange={() => onChange({ name: f.name, aggregation: 'all' })}
+                        style={{ position: 'absolute', opacity: 0, pointerEvents: 'none' }}
+                      />
+                      <span className="explore-fieldchip-radio" aria-hidden>
+                        {checked && <span className="dot" />}
+                      </span>
+                      <span className="explore-fieldchip-label">{displayLabel(f)}</span>
+                    </label>
+                  );
+                })}
+              </div>
+            </div>
+          );
+        })}
+      </div>
     </div>
   );
 }

@@ -11,6 +11,7 @@ export default function Upload() {
   const [fStart, setFStart] = useState('');
   const [fEnd, setFEnd] = useState('');
   const [processType, setProcessType] = useState('BOTH');
+  const [deembed, setDeembed] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [taskInfo, setTaskInfo] = useState(null);
   const [submitError, setSubmitError] = useState(null);
@@ -63,10 +64,7 @@ export default function Upload() {
     if (fStart) fd.append('f_start_ghz', fStart);
     if (fEnd) fd.append('f_end_ghz', fEnd);
     fd.append('process_type', processType);
-    // deembed: v1 默认关闭，不暴露给用户（后端 default=False）
-    // 调试：确认提交的 process_type
-    // eslint-disable-next-line no-console
-    console.log('[upload] process_type =', processType);
+    fd.append('deembed', deembed ? 'true' : 'false');
 
     setSubmitting(true);
     setUploadPct(0);
@@ -254,6 +252,34 @@ export default function Upload() {
                   </button>
                 ))}
               </div>
+            </div>
+            <div className="field">
+              <label
+                style={{
+                  display: 'flex',
+                  alignItems: 'flex-start',
+                  gap: 8,
+                  cursor: submitting || taskInfo ? 'default' : 'pointer',
+                  opacity: submitting || taskInfo ? 0.6 : 1,
+                }}
+              >
+                <input
+                  type="checkbox"
+                  data-testid="deembed-toggle"
+                  checked={deembed}
+                  onChange={(e) => setDeembed(e.target.checked)}
+                  disabled={submitting || !!taskInfo}
+                  style={{ marginTop: 2 }}
+                />
+                <span>
+                  <div style={{ fontSize: 13, color: 'var(--fg-1)' }}>
+                    De-embed (ShortOpen 校准)
+                  </div>
+                  <div className="dim" style={{ fontSize: 11, marginTop: 2 }}>
+                    需 zip 内含 OPEN / SHORT 校准 .s2p。开启后处理速度变慢；缺校准件会任务失败。
+                  </div>
+                </span>
+              </label>
             </div>
           </div>
         </div>

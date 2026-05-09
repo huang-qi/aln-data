@@ -100,9 +100,14 @@ def process_batch_task(
             split = split_s2p_to_s1p(s2p, out_dir_s11=s11_dir, out_dir_s22=s22_dir)
             s1p_pairs.append((split.s11_path, split.s22_path))
 
-        # 可选去嵌
+        # 可选去嵌：把 s1p_pairs 替换为去嵌后的 .s1p 路径
         if deembed_enabled:
-            _maybe_deembed(s1p_pairs, cal_open, cal_short, target_dir)
+            s1p_pairs = _run_deembed(
+                s1p_pairs=s1p_pairs,
+                cal_open=cal_open,
+                cal_short=cal_short,
+                target_dir=target_dir,
+            )
 
         # 5. 提参 + 收集 Device 行
         all_s1p: list[Path] = []
@@ -215,17 +220,74 @@ def _wafer_from_batch_no(batch_no: str) -> int | None:
     return None
 
 
-def _maybe_deembed(
+class DeembedError(RuntimeError):
+    """De-embedding 流程错误（缺校准件、单文件去嵌失败等）。"""
+
+
+def _run_deembed(
     s1p_pairs: list[tuple[Path, Path]],
     cal_open: dict[str, Path],
     cal_short: dict[str, Path],
     target_dir: Path,
-) -> None:
-    """对每个 S11/S22 s1p 用同目录 OPEN/SHORT s2p 做去嵌；找不到则跳过。"""
+) -> list[tuple[Path, Path]]:
+    """对每对 (S11, S22) s1p 用同目录 OPEN/SHORT s2p 做去嵌。
+
+    步骤：
+    1. 把每个 OPEN.s2p / SHORT.s2p 拆成 _S11.s1p / _S22.s1p
+    2. 对每个 DUT 的 S11.s1p、S22.s1p 分别用对应端口的 OPEN/SHORT 去嵌
+    3. 写出 *_de.s1p，返回新的 (s11_de, s22_de) 列表
+
+    缺校准件直接 raise DeembedError，**不静默跳过**。
+    """
     if not cal_open or not cal_short:
-        logger.warning("启用了 deembed 但未找到 OPEN/SHORT 校准文件，跳过")
-        return
-    # v1：deembed 接 .s1p (DUT) + .s1p (open/short)，但当前校准文件是 .s2p。
-    # 该路径在 v1 默认关闭；保留接口、不阻塞主流程。
-    logger.warning("deembed v1 不实现完整路径（OPEN/SHORT 为 s2p），跳过")
-    _ = (s1p_pairs, target_dir, deembed)  # 抑制 unused
+        raise DeembedError(
+            "已启用 De-embedding 但 ZIP 内未找到 OPEN/SHORT 校准 .s2p 文件；"
+            "请确认压缩包包含同名 OPEN/SHORT 文件，或在上传时取消 De-embed 选项。"
+        )
+
+    cal_s11_dir = target_dir / "cal_S11"
+    cal_s22_dir = target_dir / "cal_S22"
+    de_s11_dir = target_dir / "S11_de"
+    de_s22_dir = target_dir / "S22_de"
+
+    # 1. 拆所有 OPEN/SHORT.s2p（按目录唯一）
+    open_s11: dict[str, Path] = {}
+    open_s22: dict[str, Path] = {}
+    short_s11: dict[str, Path] = {}
+    short_s22: dict[str, Path] = {}
+    for dirkey, op in cal_open.items():
+        split = split_s2p_to_s1p(op, out_dir_s11=cal_s11_dir, out_dir_s22=cal_s22_dir)
+        open_s11[dirkey] = split.s11_path
+        open_s22[dirkey] = split.s22_path
+    for dirkey, sh in cal_short.items():
+        split = split_s2p_to_s1p(sh, out_dir_s11=cal_s11_dir, out_dir_s22=cal_s22_dir)
+        short_s11[dirkey] = split.s11_path
+        short_s22[dirkey] = split.s22_path
+
+    def _pick(d: dict[str, Path], dut_path: Path) -> Path | None:
+        """优先匹配 DUT 同 zip 子目录的校准件；若 DUT 是从 S11/S22/ 输出目录来的，
+        退回到任意一个校准件（v1 简化：通常一个 zip 只有一组 OPEN/SHORT）。"""
+        return next(iter(d.values())) if d else None
+
+    # 2. 逐对 DUT 去嵌
+    new_pairs: list[tuple[Path, Path]] = []
+    for s11_path, s22_path in s1p_pairs:
+        op11 = _pick(open_s11, s11_path)
+        sh11 = _pick(short_s11, s11_path)
+        op22 = _pick(open_s22, s22_path)
+        sh22 = _pick(short_s22, s22_path)
+        if not (op11 and sh11 and op22 and sh22):
+            raise DeembedError(
+                f"无法为 {s11_path.name} / {s22_path.name} 找到匹配的 OPEN/SHORT 校准件"
+            )
+
+        s11_de = de_s11_dir / s11_path.name.replace(".s1p", "_de.s1p")
+        s22_de = de_s22_dir / s22_path.name.replace(".s1p", "_de.s1p")
+        try:
+            deembed(s11_path, op11, sh11, s11_de)
+            deembed(s22_path, op22, sh22, s22_de)
+        except Exception as exc:  # pragma: no cover - skrf 异常透传
+            raise DeembedError(f"De-embedding 失败 {s11_path.name}: {exc}") from exc
+        new_pairs.append((s11_de, s22_de))
+
+    return new_pairs
