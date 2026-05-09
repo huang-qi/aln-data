@@ -8,7 +8,6 @@
 
 from __future__ import annotations
 
-import shutil
 import zipfile
 from pathlib import Path
 
@@ -29,7 +28,7 @@ def workdir(tmp_path_factory: pytest.TempPathFactory, sample_zip: Path) -> Path:
     return work
 
 
-def test_pipeline_runs_on_T8901P_01(workdir: Path, sample_mapping: Path) -> None:
+def test_pipeline_runs_on_t8901p_01(workdir: Path, sample_mapping: Path) -> None:
     """跑通 zip → 12 个 DUT × 2 端口 → 24 行 ResonatorRow。"""
     mapping = load_mapping(sample_mapping)
     assert len(mapping) > 0, "mapping 加载失败"
@@ -67,7 +66,8 @@ def test_pipeline_runs_on_T8901P_01(workdir: Path, sample_mapping: Path) -> None
     df = pd.DataFrame([r.model_dump() for r in rows])
     print(f"\n输出 DataFrame shape: {df.shape}")
     print(f"列: {list(df.columns)}")
-    print(df[["original_filename", "folder_name", "mark", "fs_ghz", "fp_ghz", "qs", "qp", "k2eff_pct"]].head(10).to_string())
+    cols = ["original_filename", "folder_name", "mark", "fs_ghz", "fp_ghz", "qs", "qp", "k2eff_pct"]
+    print(df[cols].head(10).to_string())
 
     assert df["fs_ghz"].between(1, 30).all(), "fs 物理范围异常"
     assert df["fp_ghz"].between(1, 30).all(), "fp 物理范围异常"

@@ -25,4 +25,4 @@ celery_app.conf.update(
     worker_prefetch_multiplier=1,  # 长任务避免一个 worker 抢太多
 )
 
-# TODO(stage-2): from app.workers import process_batch  # noqa: F401
+from app.workers import process_batch  # noqa: E402,F401

@@ -18,6 +18,7 @@ import logging
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
+from app.api import batches, devices, export, mappings, query, system, tasks, upload
 from app.config import get_settings
 
 settings = get_settings()
@@ -33,7 +34,6 @@ app = FastAPI(
     openapi_url="/api/openapi.json",
 )
 
-# CORS：开发期允许 Vite dev server
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["http://localhost:5173", "http://127.0.0.1:5173"],
@@ -42,16 +42,11 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-
-@app.get("/api/health")
-def health() -> dict:
-    """健康检查。详见 docs/api.md §9。"""
-    # TODO: 实际探测 db / redis / 磁盘
-    return {"status": "ok"}
-
-
-# TODO: 各业务路由模块在 stage 2 实现后挂载
-# from app.api import upload, batches, mappings, query, devices, export, tasks, system
-# app.include_router(upload.router, prefix="/api")
-# app.include_router(batches.router, prefix="/api")
-# ...
+app.include_router(system.router, prefix="/api")
+app.include_router(upload.router, prefix="/api")
+app.include_router(tasks.router, prefix="/api")
+app.include_router(batches.router, prefix="/api")
+app.include_router(mappings.router, prefix="/api")
+app.include_router(query.router, prefix="/api")
+app.include_router(devices.router, prefix="/api")
+app.include_router(export.router, prefix="/api")
