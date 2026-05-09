@@ -5,7 +5,7 @@ from __future__ import annotations
 from typing import Annotated, Any
 
 from fastapi import APIRouter, HTTPException, Query
-from sqlalchemy import ColumnElement, and_, distinct, func, select
+from sqlalchemy import ColumnElement, and_, distinct, func, null, select
 
 from app.api.deps import ALLOWED_QUERY_FIELDS, DEVICE_COLUMNS, DbSession
 from app.models import Batch, Device
@@ -27,6 +27,11 @@ def _resolve_column(name: str) -> ColumnElement[Any]:
     if name in DEVICE_COLUMNS:
         return getattr(Device, name)
     raise HTTPException(status_code=400, detail=f"未知字段: {name}")
+
+
+def _escape_like(val: str) -> str:
+    """转义 SQL LIKE 通配符 % 和 _ 与转义符 \\，防止用户输入被解释为通配模式。"""
+    return val.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
 
 
 def _build_filter_clause(name: str, spec: Any) -> ColumnElement[bool]:
@@ -55,7 +60,15 @@ def _build_filter_clause(name: str, spec: Any) -> ColumnElement[bool]:
             elif op == "lt":
                 clauses.append(col < val)
             elif op == "like":
-                clauses.append(col.like(val))
+                # 保留用户的 % / _ 字面值，避免 "50%" 被解释为前缀模式。
+                # 调用方若想传通配，请用 contains 或 startswith。
+                if not isinstance(val, str):
+                    raise HTTPException(status_code=400, detail=f"{name}.like 必须为字符串")
+                clauses.append(col.like(_escape_like(val), escape="\\"))
+            elif op == "contains":
+                if not isinstance(val, str):
+                    raise HTTPException(status_code=400, detail=f"{name}.contains 必须为字符串")
+                clauses.append(col.like(f"%{_escape_like(val)}%", escape="\\"))
             else:
                 raise HTTPException(
                     status_code=400, detail=f"不支持的操作符: {name}.{op}"
@@ -68,7 +81,9 @@ def _build_filters(filters: dict[str, Any]) -> list[ColumnElement[bool]]:
     return [_build_filter_clause(k, v) for k, v in filters.items()]
 
 
-def _aggregate_expr(field: str, op: str) -> ColumnElement[Any]:
+def _aggregate_expr(
+    field: str, op: str, *, dialect: str | None = None
+) -> ColumnElement[Any]:
     col = _resolve_column(field)
     if op == "count":
         return func.count(col)
@@ -82,6 +97,11 @@ def _aggregate_expr(field: str, op: str) -> ColumnElement[Any]:
         return func.sum(col)
     if op in ("p25", "p50", "p75"):
         pct = {"p25": 0.25, "p50": 0.5, "p75": 0.75}[op]
+        # percentile_cont 是 PostgreSQL 有序集聚合，SQLite 不支持。
+        # SQLite 上回退为 NULL（前端会展示为缺失），避免直接崩溃；
+        # 若运行在 SQLite 又必须用 percentile，应换 PostgreSQL 部署。
+        if dialect == "sqlite":
+            return null()
         return func.percentile_cont(pct).within_group(col.asc())
     raise HTTPException(status_code=400, detail=f"不支持的聚合操作: {op}")
 
@@ -161,12 +181,16 @@ def aggregate(req: AggregateRequest, db: DbSession) -> AggregateResponse:
 
     where = _build_filters(req.filters)
 
+    dialect = db.bind.dialect.name if db.bind is not None else None
+
     group_cols = [_resolve_column(g).label(g) for g in req.group_by]
     metric_cols: list[ColumnElement[Any]] = []
     metric_keys: list[tuple[str, str]] = []
     for m in req.metrics:
         for op in m.agg:
-            metric_cols.append(_aggregate_expr(m.field, op).label(f"{m.field}__{op}"))
+            metric_cols.append(
+                _aggregate_expr(m.field, op, dialect=dialect).label(f"{m.field}__{op}")
+            )
             metric_keys.append((m.field, op))
 
     select_cols = [*group_cols, *metric_cols]
@@ -198,13 +222,23 @@ def distinct_values(
     limit: Annotated[int, Query(ge=1, le=5000)] = 500,
 ) -> dict[str, Any]:
     if field == "batch_no":
-        stmt = select(distinct(Batch.batch_no)).order_by(Batch.batch_no).limit(limit)
+        stmt = select(distinct(Batch.batch_no)).order_by(Batch.batch_no).limit(limit + 1)
     else:
         col = _resolve_column(field)
-        stmt = select(distinct(col)).order_by(col).limit(limit)
+        stmt = select(distinct(col)).order_by(col).limit(limit + 1)
     rows = db.execute(stmt).all()
-    values = [r[0] for r in rows if r[0] is not None]
-    return {"field": field, "values": values}
+    raw = [r[0] for r in rows]
+    has_null = any(v is None for v in raw)
+    values = [v for v in raw if v is not None]
+    truncated = len(values) > limit or (has_null and len(raw) > limit)
+    if truncated:
+        values = values[:limit]
+    return {
+        "field": field,
+        "values": values,
+        "has_null": has_null,
+        "truncated": truncated,
+    }
 
 
 @router.get("/fields")
@@ -275,9 +309,21 @@ def fields_metadata() -> dict[str, Any]:
             {"name": "zs2_ohm", "label": "Zs2", "unit": "Ω"},
         ],
         "process": [
-            {"name": "eg", "label": "EG"},
-            {"name": "fl", "label": "FL"},
-            {"name": "ag", "label": "AG"},
+            {
+                "name": "eg",
+                "label": "EG",
+                "values_endpoint": "/api/query/distinct?field=eg",
+            },
+            {
+                "name": "fl",
+                "label": "FL",
+                "values_endpoint": "/api/query/distinct?field=fl",
+            },
+            {
+                "name": "ag",
+                "label": "AG",
+                "values_endpoint": "/api/query/distinct?field=ag",
+            },
             {
                 "name": "area_um2",
                 "label": "Area",

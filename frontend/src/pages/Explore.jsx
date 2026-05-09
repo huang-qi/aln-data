@@ -106,8 +106,10 @@ export default function Explore() {
   // Z field: { name, aggregation } | null. Same convention as Y.
   const [zField, setZField] = useState(null);
 
-  // wafer-only state.
-  const [waferZ, setWaferZ] = useState('k2eff_pct');
+  // wafer-only state. waferZ carries an aggregation just like yFields,
+  // because multiple devices can share the same (x, y) cell — without
+  // aggregation the last-drawn point silently wins.
+  const [waferZ, setWaferZ] = useState({ name: 'k2eff_pct', aggregation: 'mean' });
   const [waferFacet, setWaferFacet] = useState(NO_FACET);
 
   // Filters / query state.
@@ -143,30 +145,69 @@ export default function Explore() {
     const m = enrichField(zField.name, fields);
     return m ? { ...m, aggregation: zField.aggregation || 'all' } : null;
   }, [zField, fields]);
-  const waferZMeta = useMemo(() => enrichField(waferZ, fields), [waferZ, fields]);
+  const waferZMeta = useMemo(() => {
+    if (!waferZ) return null;
+    const m = enrichField(waferZ.name, fields);
+    return m ? { ...m, aggregation: waferZ.aggregation || 'all' } : null;
+  }, [waferZ, fields]);
 
-  // Whether the current Y/Z selection requires the aggregate API.
+  // Whether the current selection requires the aggregate API.
   const needsAggregate = useMemo(() => {
+    if (isWafer) {
+      return !!(waferZ && waferZ.aggregation && waferZ.aggregation !== 'all');
+    }
     if (yMeta.some((f) => f.isCategorical ? false : (f.aggregation && f.aggregation !== 'all'))) return true;
     if (zMeta && !zMeta.isCategorical && zMeta.aggregation && zMeta.aggregation !== 'all') return true;
     return false;
-  }, [yMeta, zMeta]);
+  }, [isWafer, waferZ, yMeta, zMeta]);
 
-  // Aggregate mode requires at least one categorical X (X is the GROUP BY key).
+  // Aggregate mode requires at least one categorical X. Wafer mode is
+  // exempt because its group_by is always (x, y, [facet]).
   const hasCategoricalX = useMemo(() => xMeta.some((f) => f.isCategorical), [xMeta]);
   const aggregateXWarning = useMemo(() => {
-    if (!needsAggregate) return null;
-    if (!hasCategoricalX) return '聚合模式需要至少一个类别 X 字段（已自动 fallback 为 ALL）';
+    if (!needsAggregate || isWafer) return null;
+    if (!hasCategoricalX) return '聚合模式需要至少一个类别 X 字段（已自动 fallback 为 ALL，未真正聚合）';
     return null;
-  }, [needsAggregate, hasCategoricalX]);
+  }, [needsAggregate, hasCategoricalX, isWafer]);
   // If aggregate would be invalid (no categorical X) we silently fall back.
-  const useAggregate = needsAggregate && hasCategoricalX;
+  const useAggregate = isWafer ? needsAggregate : (needsAggregate && hasCategoricalX);
+
+  // Y/Z conflict: same field with different aggregations would need two
+  // metric columns and a renamed Z key. We refuse the combination and
+  // tell the user — Z=Y is rarely meaningful anyway (the color encodes
+  // the same thing the Y-axis already shows).
+  const yzFieldConflict = useMemo(() => {
+    if (!zMeta) return null;
+    const yHit = yMeta.find((y) => y.name === zMeta.name);
+    if (!yHit) return null;
+    return `Z 字段 "${zMeta.name}" 与 Y 字段重复，颜色编码与 Y 轴信息一致 — 建议改选其他 Z 字段`;
+  }, [yMeta, zMeta]);
 
   const run = async () => {
     setLoading(true);
     setError(null);
     try {
-      // ── Aggregate branch (Y/Z aggregation requested + categorical X exists)
+      // ── Wafer aggregate branch: collapse multiple devices per (x, y) cell.
+      if (isWafer && useAggregate) {
+        const wireOp = aggWireName(waferZ.aggregation);
+        const groupBy = ['x', 'y'];
+        if (waferFacet && waferFacet !== NO_FACET) groupBy.push(waferFacet);
+        const metrics = [{ field: waferZ.name, agg: [wireOp] }];
+        const res = await queryAggregate({ filters, group_by: groupBy, metrics });
+        const flat = (res.groups || []).map((g) => {
+          const row = { ...g };
+          const v = g[waferZ.name];
+          if (v && typeof v === 'object' && !Array.isArray(v)) {
+            row[waferZ.name] = v[wireOp];
+          }
+          return row;
+        });
+        setRows(flat);
+        setStats({ total: flat.length, returned: flat.length, truncated: false });
+        return;
+      }
+
+      // ── Generic aggregate branch (Y/Z aggregation requested + categorical X)
       if (!isWafer && useAggregate) {
         // group_by = selected X fields, plus Z if Z is a categorical bucket
         // (otherwise the per-Z lines / boxes would collapse into the X bin).
@@ -174,41 +215,46 @@ export default function Explore() {
         if (zMeta && zMeta.isCategorical && !groupBy.includes(zMeta.name)) {
           groupBy.push(zMeta.name);
         }
-        // Build metrics: one per Y/Z field that has a non-'all' aggregation.
-        // Keys: { field, agg: [<wireName>] }. Categorical Y is skipped (the
-        // UI never offers an agg dropdown for it, but guard here too).
-        const metrics = [];
-        const aggByField = {}; // field-name -> ui-key, used during flatten
+        // Build metrics: collect ops per field across Y and (numeric) Z.
+        // When Y and Z are the same field with the same op, we just send
+        // it once; when ops differ we emit both, but the flatten step
+        // below uses Y's op to populate row[field] (Z=Y is flagged in the
+        // UI as a conflict — we don't need a second column for it).
+        const opsByField = new Map(); // field -> Set<wireOp>
+        const yOpByField = {};
         for (const y of yMeta) {
           if (!y.isCategorical && y.aggregation && y.aggregation !== 'all') {
-            metrics.push({ field: y.name, agg: [aggWireName(y.aggregation)] });
-            aggByField[y.name] = aggWireName(y.aggregation);
+            const op = aggWireName(y.aggregation);
+            if (!opsByField.has(y.name)) opsByField.set(y.name, new Set());
+            opsByField.get(y.name).add(op);
+            yOpByField[y.name] = op;
           }
         }
+        let zOp = null;
         if (zMeta && !zMeta.isCategorical && zMeta.aggregation && zMeta.aggregation !== 'all') {
-          // If Z field already in metrics (also a Y), don't dup.
-          if (!aggByField[zMeta.name]) {
-            metrics.push({ field: zMeta.name, agg: [aggWireName(zMeta.aggregation)] });
-            aggByField[zMeta.name] = aggWireName(zMeta.aggregation);
-          }
+          zOp = aggWireName(zMeta.aggregation);
+          if (!opsByField.has(zMeta.name)) opsByField.set(zMeta.name, new Set());
+          opsByField.get(zMeta.name).add(zOp);
         }
+        const metrics = [...opsByField].map(([field, ops]) => ({ field, agg: [...ops] }));
+
         const res = await queryAggregate({ filters, group_by: groupBy, metrics });
-        // Flatten {x_field: v, qs: {avg: 1234}} → {x_field: v, qs: 1234}.
+        // Flatten {x_field: v, qs: {avg: 1234, p75: 5678}} → row[qs] = Y's op,
+        // and (when Z is numeric and not also a Y) row[zMeta.name] = Z's op.
         const flat = (res.groups || []).map((g) => {
           const row = {};
           for (const k of Object.keys(g)) {
             const v = g[k];
             if (v && typeof v === 'object' && !Array.isArray(v)) {
-              // Take the (sole) requested agg op for this field.
-              const op = aggByField[k];
-              row[k] = op != null ? v[op] : Object.values(v)[0];
+              // Pick Y's op for this field if available, else Z's op.
+              const op = yOpByField[k] || (k === zMeta?.name ? zOp : null);
+              row[k] = op != null ? v[op] : undefined;
             } else {
               row[k] = v;
             }
           }
-          // Inject Y fields whose aggregation is 'all' as undefined to make
-          // it visually obvious they have no per-X bucket value (Charts will
-          // show empty for that subplot — user-visible signal to switch back).
+          // Y fields with aggregation 'all' become null so the chart shows
+          // empty cells — a visible signal that the user mixed agg/raw.
           for (const y of yMeta) {
             if ((y.aggregation || 'all') === 'all' && !(y.name in row)) {
               row[y.name] = null;
@@ -225,7 +271,7 @@ export default function Explore() {
       const fieldSet = new Set(['id']);
       if (isWafer) {
         ['x', 'y'].forEach((k) => fieldSet.add(k));
-        if (waferZ) fieldSet.add(waferZ);
+        if (waferZ?.name) fieldSet.add(waferZ.name);
         if (waferFacet && waferFacet !== NO_FACET) fieldSet.add(waferFacet);
         // include common identification cols for tooltip / modal.
         ['batch_no', 'wafer', 'folder_name', 'pf'].forEach((k) => fieldSet.add(k));
@@ -245,6 +291,11 @@ export default function Explore() {
       setStats({ total: res.total, returned: res.returned, truncated: res.truncated });
     } catch (e) {
       setError(e.message);
+      // Don't leave stale rows on screen with an error banner — the user
+      // would otherwise mistake the previous query's chart for the
+      // current (failed) one.
+      setRows([]);
+      setStats(null);
     } finally {
       setLoading(false);
     }
@@ -268,14 +319,16 @@ export default function Explore() {
 
   // Header title for the chart card.
   const titleText = isWafer
-    ? `Wafer 版图 · ${waferZMeta ? displayLabel(waferZMeta) : waferZ}`
+    ? `Wafer 版图 · ${waferZMeta ? displayLabel(waferZMeta) : waferZ?.name || ''}`
+      + (waferZ?.aggregation && waferZ.aggregation !== 'all' ? ` (${waferZ.aggregation})` : '')
     : (() => {
         const xs = xMeta.map((f) => displayLabel(f)).join(', ') || '—';
         const ys = yMeta.map((f) => displayLabel(f)).join(', ') || '—';
         return `${xs}  ×  ${ys}`;
       })();
 
-  // Distinct facet values for wafer mode.
+  // Distinct facet values for wafer mode. Numeric values sort numerically;
+  // strings use natural (numeric-aware) compare so wafer-2 < wafer-10.
   const waferFacetValues = useMemo(() => {
     if (!isWafer || !waferFacet || waferFacet === NO_FACET) return [];
     const s = new Set();
@@ -283,7 +336,10 @@ export default function Explore() {
       const v = r[waferFacet];
       if (v !== null && v !== undefined) s.add(v);
     });
-    return Array.from(s).sort((a, b) => (a > b ? 1 : a < b ? -1 : 0));
+    return Array.from(s).sort((a, b) => {
+      if (typeof a === 'number' && typeof b === 'number') return a - b;
+      return String(a).localeCompare(String(b), undefined, { numeric: true });
+    });
   }, [rows, isWafer, waferFacet]);
 
   // Heuristic warning: violin/box with no categorical X is awkward.
@@ -294,6 +350,28 @@ export default function Explore() {
     if (allNumeric) return '建议至少选一个类别字段做 X（例如 EG / batch_no），否则会被强制按数值分箱';
     return null;
   }, [chartType, xMeta]);
+
+  // Runtime warnings emitted by UnifiedChartGrid (numeric Z dropped, X
+  // tick count clamped, etc). Reset on each query.
+  const [chartWarnings, setChartWarnings] = useState([]);
+  useEffect(() => { setChartWarnings([]); }, [rows, chartType, xFields, yFields, zField]);
+  const onChartWarn = (w) => {
+    setChartWarnings((prev) => {
+      if (prev.some((p) => p.kind === w.kind && p.xField === w.xField)) return prev;
+      return [...prev, w];
+    });
+  };
+
+  // Format a single warning into a user-facing string.
+  const formatChartWarning = (w) => {
+    if (w.kind === 'z_numeric_dropped') {
+      return `当前图表（${w.chartType}）不支持数值 Z（"${w.zField}"）做颜色编码，已忽略 — 请改选类别字段或切换到散点图`;
+    }
+    if (w.kind === 'x_categories_clamped') {
+      return `X 字段 "${w.xField}" 共 ${w.total} 个不同值，超出 box/violin 渲染上限，仅显示前 ${w.shown} 个 — 建议改用散点图或选数值更少的 X`;
+    }
+    return JSON.stringify(w);
+  };
 
   return (
     <>
@@ -359,6 +437,24 @@ export default function Explore() {
               )}
               {rows.length > 0 && (
                 <div style={{ position: 'absolute', inset: 0, overflow: 'auto' }}>
+                  {/* Runtime warnings: aggregate fallback / Y=Z conflict /
+                      chart-type-specific issues. Always shown above the chart
+                      so the user notices when something silently changed. */}
+                  {(aggregateXWarning || yzFieldConflict || chartWarnings.length > 0) && (
+                    <div className="explore-chartwarns" style={{
+                      padding: '8px 12px',
+                      background: 'rgba(255, 195, 0, 0.08)',
+                      borderBottom: '1px solid rgba(255, 195, 0, 0.3)',
+                      fontSize: 11.5,
+                      color: '#92611a',
+                    }}>
+                      {aggregateXWarning && <div>⚠ {aggregateXWarning}</div>}
+                      {yzFieldConflict && <div>⚠ {yzFieldConflict}</div>}
+                      {chartWarnings.map((w, i) => (
+                        <div key={i}>⚠ {formatChartWarning(w)}</div>
+                      ))}
+                    </div>
+                  )}
                   {!isWafer && (xMeta.length === 0 || yMeta.length === 0) && (
                     <div style={{ padding: 40, color: 'var(--fg-4)', textAlign: 'center' }}>
                       请至少选择 1 个 X 字段和 1 个 Y 字段
@@ -371,16 +467,20 @@ export default function Explore() {
                       xFields={xMeta}
                       yFields={yMeta}
                       zField={zMeta}
+                      onWarn={onChartWarn}
                     />
                   )}
                   {isWafer && (
                     <WaferMap
                       rows={rows}
-                      valueField={waferZ}
-                      valueLabel={waferZMeta ? displayLabel(waferZMeta) : waferZ}
+                      valueField={waferZ.name}
+                      valueLabel={waferZMeta ? displayLabel(waferZMeta) : waferZ.name}
                       facetField={waferFacet !== NO_FACET ? waferFacet : null}
                       facets={waferFacetValues}
-                      onPointClick={(d) => setActiveDevice(d)}
+                      aggregated={useAggregate}
+                      // 聚合模式下一格已合并多器件，没有 device.id 可跳详情；
+                      // 不传 onPointClick 让 WaferMap 内部禁用点击。
+                      onPointClick={useAggregate ? undefined : (d) => setActiveDevice(d)}
                     />
                   )}
                 </div>
@@ -405,6 +505,7 @@ export default function Explore() {
           yMeta={yMeta}
           violinXWarning={violinXWarning}
           aggregateXWarning={aggregateXWarning}
+          yzFieldConflict={yzFieldConflict}
           limit={limit}
           setLimit={setLimit}
           stats={stats}
@@ -430,7 +531,7 @@ function Inspector({
   zField, setZField,
   waferZ, setWaferZ,
   waferFacet, setWaferFacet,
-  xMeta, yMeta, violinXWarning, aggregateXWarning,
+  xMeta, yMeta, violinXWarning, aggregateXWarning, yzFieldConflict,
   limit, setLimit, stats,
 }) {
   const isWafer = chartType === 'wafer';
@@ -452,12 +553,15 @@ function Inspector({
               <div className="explore-locked-hint">
                 X / Y 锁定为器件几何坐标 (x, y)
               </div>
-              <FieldRadio
-                label="颜色编码 (Z)"
+              <div className="field-label" style={{ marginBottom: 6 }}>
+                <span>颜色编码 (Z)</span>
+                <span className="hint">同 (x,y) 多值时按聚合方式合并</span>
+              </div>
+              <FieldRadioWithAgg
                 hint="numeric"
                 fields={fields}
                 value={waferZ}
-                onChange={setWaferZ}
+                onChange={(v) => v && setWaferZ(v)}
                 allowedSections={['numeric', 'process', 'geometric']}
                 allowNone={false}
               />
@@ -467,7 +571,7 @@ function Inspector({
                 fields={fields}
                 value={waferFacet}
                 onChange={setWaferFacet}
-                allowedSections={['categorical']}
+                allowedSections={['categorical', 'process']}
                 allowNone={true}
                 noneLabel="不分面"
                 noneValue="__none__"
@@ -491,11 +595,15 @@ function Inspector({
                 value={yFields}
                 onChange={setYFields}
               />
-              {violinXWarning && (
-                <div className="explore-warn">⚠ {violinXWarning}</div>
-              )}
-              {aggregateXWarning && (
+              {/* aggregate fallback wins over violin/box X hint —
+                  the two messages overlap and contradict each other. */}
+              {aggregateXWarning ? (
                 <div className="explore-warn">⚠ {aggregateXWarning}</div>
+              ) : violinXWarning ? (
+                <div className="explore-warn">⚠ {violinXWarning}</div>
+              ) : null}
+              {yzFieldConflict && (
+                <div className="explore-warn">⚠ {yzFieldConflict}</div>
               )}
             </div>
             <div className="section">
@@ -523,8 +631,14 @@ function Inspector({
             <input
               className="input mono"
               type="number"
+              min={1}
+              max={200000}
               value={limit}
-              onChange={(e) => setLimit(parseInt(e.target.value, 10) || 0)}
+              onChange={(e) => {
+                const n = parseInt(e.target.value, 10);
+                // 用户清空输入框时回退默认值，避免发出 limit=0 触发后端 400。
+                setLimit(Number.isFinite(n) && n >= 1 ? Math.min(n, 200000) : 50000);
+              }}
             />
           </div>
         </div>

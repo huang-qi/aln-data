@@ -1,5 +1,12 @@
-import React from 'react';
+import React, { useEffect } from 'react';
 import Plot from 'react-plotly.js';
+
+// Sentinel for null/undefined Z bucket — kept as a literal so the legend
+// reads "∅" and groupBy() / distinctSortedValues() / per-trace filters all
+// agree on the same key. Without this, rows with null Z fall out of
+// every per-Z trace and silently disappear from the chart.
+const NULL_KEY = '∅';
+const isNullish = (v) => v === null || v === undefined;
 
 const baseLayout = {
   paper_bgcolor: '#ffffff',
@@ -41,12 +48,21 @@ function groupBy(rows, key) {
   return m;
 }
 
+// Match strings that are exactly a finite number (no trailing letters).
+const PURE_NUMBER_RE = /^-?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?$/;
+
 // Sort categorical keys (numbers numerically, strings lexically).
+// `parseFloat('1A') === 1` is *not* a number for our purposes — the
+// trailing 'A' carries meaning and would be dropped by numeric sort.
 function sortKeys(keys) {
   const arr = [...keys];
-  const allNum = arr.every((k) => typeof k === 'number' || (!isNaN(parseFloat(k)) && isFinite(k)));
+  const allNum = arr.every((k) =>
+    typeof k === 'number' || (typeof k === 'string' && PURE_NUMBER_RE.test(k)),
+  );
   if (allNum) return arr.sort((a, b) => parseFloat(a) - parseFloat(b));
-  return arr.sort((a, b) => String(a).localeCompare(String(b)));
+  // localeCompare with numeric:true gives natural sort for mixed strings
+  // (e.g. wafer-1, wafer-2, wafer-10 instead of 1, 10, 2).
+  return arr.sort((a, b) => String(a).localeCompare(String(b), undefined, { numeric: true }));
 }
 
 /* ------------------------------------------------------------------
@@ -92,6 +108,7 @@ export function ScatterPlot({
     const colorKeysSorted = colorKey ? sortKeys(colorGroups.keys()) : ['all'];
     let i = 0;
     for (const ck of colorKeysSorted) {
+      // groupBy stores '∅' for null keys; reading via the same key works.
       const grp = colorGroups.get(ck);
       let xs, ys;
       if (xIsCategory) {
@@ -536,12 +553,16 @@ export function FacetedGrid({
  *  set, build a 1-row × N-col subplot grid (one panel per facet
  *  value, sharing the colorbar). 1:1 aspect ratio so dies look square.
  *
- *  Multiple devices at the same (x, y) overlap; the last drawn point
- *  wins visually but hover lists all neighbours via the tooltip.
+ *  When `aggregated` is false, multiple devices may share an (x, y)
+ *  cell; only the last one is visible. The tooltip then lists how
+ *  many devices share the cell so the user is aware. To show a
+ *  unique value per cell, the caller should aggregate upstream and
+ *  pass aggregated=true.
  * ------------------------------------------------------------------ */
 export function WaferMap({
   rows, valueField, valueLabel,
   facetField, facets,
+  aggregated = false,
   onPointClick,
 }) {
   const allXs = rows.map((r) => r['x']).filter(Number.isFinite);
@@ -560,11 +581,17 @@ export function WaferMap({
     ? facets.map((fv) => ({ key: String(fv), rows: rows.filter((r) => String(r[facetField]) === String(fv)) }))
     : [{ key: 'all', rows }];
 
+  // Marker size shrinks with facet count so dies stay non-overlapping in
+  // each panel. With many facets the per-panel width is small, so a
+  // fixed 22px square would smear neighbouring dies into a color blob.
+  const markerSize = Math.max(8, Math.round(22 / Math.sqrt(panels.length)));
+
+  // Reserve more right margin when colorbar is shown.
   const traces = [];
   const layout = {
     ...baseLayout,
     showlegend: false,
-    margin: { l: 56, r: 16, t: 36, b: 44 },
+    margin: { l: 56, r: 88, t: 36, b: 44 },
     annotations: [],
   };
 
@@ -606,7 +633,30 @@ export function WaferMap({
       });
     }
 
+    // Build per-cell tooltip data. When the caller hasn't aggregated, we
+    // count how many rows fall on each (x, y) so the user knows when a
+    // cell is masking duplicates.
     const pRows = panel.rows;
+    let tooltipRows = pRows;
+    if (!aggregated) {
+      const cellCount = new Map();
+      for (const r of pRows) {
+        const key = `${r.x}|${r.y}`;
+        cellCount.set(key, (cellCount.get(key) || 0) + 1);
+      }
+      tooltipRows = pRows.map((r) => ({ ...r, _cell_n: cellCount.get(`${r.x}|${r.y}`) || 1 }));
+    }
+
+    const hoverTemplate = aggregated
+      ? '<b>x=%{x}, y=%{y}</b><br>'
+        + (valueLabel || valueField) + ': %{marker.color:.4g}'
+        + '<extra></extra>'
+      : '<b>id %{customdata.id}</b><br>'
+        + 'x=%{x}, y=%{y}<br>'
+        + (valueLabel || valueField) + ': %{marker.color:.4g}<br>'
+        + '此格器件数: %{customdata._cell_n}'
+        + '<extra></extra>';
+
     traces.push({
       type: 'scattergl',
       mode: 'markers',
@@ -615,7 +665,7 @@ export function WaferMap({
       xaxis: xref,
       yaxis: yref,
       marker: {
-        size: 22,
+        size: markerSize,
         symbol: 'square',
         color: pRows.map((r) => r[valueField]),
         colorscale: NUMERIC_COLORSCALE,
@@ -623,17 +673,13 @@ export function WaferMap({
         cmax: vMax,
         showscale: pIdx === panels.length - 1,
         colorbar: pIdx === panels.length - 1
-          ? { title: { text: valueLabel || valueField, side: 'right' }, thickness: 12, len: 0.7 }
+          ? { title: { text: valueLabel || valueField, side: 'right' }, thickness: 12, len: 0.7, x: 1.02 }
           : undefined,
         line: { width: 1, color: 'rgba(15,23,42,0.25)' },
         opacity: 0.9,
       },
-      customdata: pRows,
-      hovertemplate:
-        '<b>id %{customdata.id}</b><br>'
-        + 'x=%{x}, y=%{y}<br>'
-        + (valueLabel || valueField) + ': %{marker.color:.4g}'
-        + '<extra></extra>',
+      customdata: tooltipRows,
+      hovertemplate: hoverTemplate,
       name: panel.key,
     });
   });
@@ -670,13 +716,26 @@ export function WaferMap({
  * ------------------------------------------------------------------ */
 
 // Resolve all distinct values of a categorical field across rows, sorted.
-function distinctSortedValues(rows, key) {
+// When `includeNull` is true, a NULL_KEY sentinel is appended so trace
+// builders can render an "unknown" bucket instead of dropping null rows.
+function distinctSortedValues(rows, key, { includeNull = false } = {}) {
   const set = new Set();
+  let hasNull = false;
   rows.forEach((r) => {
     const v = r?.[key];
-    if (v !== null && v !== undefined) set.add(v);
+    if (isNullish(v)) hasNull = true;
+    else set.add(v);
   });
-  return sortKeys(set);
+  const sorted = sortKeys(set);
+  if (includeNull && hasNull) sorted.push(NULL_KEY);
+  return sorted;
+}
+
+// Build the "rows belonging to category zv" predicate. When zv is the
+// NULL_KEY sentinel, match rows whose value is null/undefined.
+function rowsForZ(rows, zKey, zv) {
+  if (zv === NULL_KEY) return rows.filter((r) => isNullish(r[zKey]));
+  return rows.filter((r) => r[zKey] === zv);
 }
 
 // Sub-axis suffix: cell index 1 → '', cell index 2 → '2', ...
@@ -739,10 +798,10 @@ function buildScatterTraces({ rows, xField, yField, zField, axisRef, useGl, zCat
     // a single legend across all cells; only the FIRST cell shows the
     // legend entry.
     const zKey = zField.name;
-    const zVals = zCategoryValues || distinctSortedValues(rows, zKey);
+    const zVals = zCategoryValues || distinctSortedValues(rows, zKey, { includeNull: true });
     let i = 0;
     for (const zv of zVals) {
-      const grp = rows.filter((r) => r[zKey] === zv);
+      const grp = rowsForZ(rows, zKey, zv);
       traces.push({
         type: wantGl ? 'scattergl' : 'scatter',
         mode: 'markers',
@@ -798,21 +857,25 @@ function buildBoxTraces({ rows, xField, yField, zField, axisRef, zCategoryValues
   const yKey = yField.name;
   const xref = `x${axisRef}`;
   const yref = `y${axisRef}`;
+  const xIsCat = !!xField.isCategorical;
   const yIsCat = !!yField.isCategorical;
   const traces = [];
 
   if (yIsCat) {
     // Horizontal box: y is the category, x is the numeric value.
+    // If the X axis is *also* categorical (rare but possible), stringify so
+    // box positions match the layout's string categoryarray.
+    const mapX = xIsCat ? (d) => String(d[xKey]) : (d) => d[xKey];
     if (zField && zField.isCategorical) {
       const zKey = zField.name;
-      const zVals = zCategoryValues || distinctSortedValues(rows, zKey);
+      const zVals = zCategoryValues || distinctSortedValues(rows, zKey, { includeNull: true });
       let i = 0;
       for (const zv of zVals) {
-        const grp = rows.filter((r) => r[zKey] === zv);
+        const grp = rowsForZ(rows, zKey, zv);
         traces.push({
           type: 'box',
           orientation: 'h',
-          x: grp.map((d) => d[xKey]),
+          x: grp.map(mapX),
           y: grp.map((d) => String(d[yKey])),
           xaxis: xref,
           yaxis: yref,
@@ -833,7 +896,7 @@ function buildBoxTraces({ rows, xField, yField, zField, axisRef, zCategoryValues
       traces.push({
         type: 'box',
         orientation: 'h',
-        x: rows.map((d) => d[xKey]),
+        x: rows.map(mapX),
         y: rows.map((d) => String(d[yKey])),
         xaxis: xref,
         yaxis: yref,
@@ -850,10 +913,10 @@ function buildBoxTraces({ rows, xField, yField, zField, axisRef, zCategoryValues
 
   if (zField && zField.isCategorical) {
     const zKey = zField.name;
-    const zVals = zCategoryValues || distinctSortedValues(rows, zKey);
+    const zVals = zCategoryValues || distinctSortedValues(rows, zKey, { includeNull: true });
     let i = 0;
     for (const zv of zVals) {
-      const grp = rows.filter((r) => r[zKey] === zv);
+      const grp = rowsForZ(rows, zKey, zv);
       traces.push({
         type: 'box',
         x: grp.map((d) => String(d[xKey])),
@@ -901,21 +964,25 @@ function buildViolinTraces({ rows, xField, yField, zField, axisRef, zCategoryVal
   const yKey = yField.name;
   const xref = `x${axisRef}`;
   const yref = `y${axisRef}`;
+  const xIsCat = !!xField.isCategorical;
   const yIsCat = !!yField.isCategorical;
   const traces = [];
 
   if (yIsCat) {
+    // Stringify X when the X axis is categorical so trace points align
+    // with the layout's string categoryarray.
+    const mapX = xIsCat ? (d) => String(d[xKey]) : (d) => d[xKey];
     if (zField && zField.isCategorical) {
       const zKey = zField.name;
-      const zVals = zCategoryValues || distinctSortedValues(rows, zKey);
+      const zVals = zCategoryValues || distinctSortedValues(rows, zKey, { includeNull: true });
       let i = 0;
       for (const zv of zVals) {
-        const grp = rows.filter((r) => r[zKey] === zv);
+        const grp = rowsForZ(rows, zKey, zv);
         const c = PALETTE[i % PALETTE.length];
         traces.push({
           type: 'violin',
           orientation: 'h',
-          x: grp.map((d) => d[xKey]),
+          x: grp.map(mapX),
           y: grp.map((d) => String(d[yKey])),
           xaxis: xref,
           yaxis: yref,
@@ -941,7 +1008,7 @@ function buildViolinTraces({ rows, xField, yField, zField, axisRef, zCategoryVal
       traces.push({
         type: 'violin',
         orientation: 'h',
-        x: rows.map((d) => d[xKey]),
+        x: rows.map(mapX),
         y: rows.map((d) => String(d[yKey])),
         xaxis: xref,
         yaxis: yref,
@@ -963,10 +1030,10 @@ function buildViolinTraces({ rows, xField, yField, zField, axisRef, zCategoryVal
 
   if (zField && zField.isCategorical) {
     const zKey = zField.name;
-    const zVals = zCategoryValues || distinctSortedValues(rows, zKey);
+    const zVals = zCategoryValues || distinctSortedValues(rows, zKey, { includeNull: true });
     let i = 0;
     for (const zv of zVals) {
-      const grp = rows.filter((r) => r[zKey] === zv);
+      const grp = rowsForZ(rows, zKey, zv);
       const c = PALETTE[i % PALETTE.length];
       traces.push({
         type: 'violin',
@@ -1023,10 +1090,11 @@ function buildViolinTraces({ rows, xField, yField, zField, axisRef, zCategoryVal
 //
 // If Y is categorical, lines have no real meaning → fall back to markers only.
 //
-// When X is categorical and Y is numeric, multiple devices typically share
-// the same X tick, so we collapse rows to their mean per X tick (per Z group)
-// — matching the customer reference plot's smooth one-point-per-tick lines.
-// Without this collapse the line zigzags wildly within each X bucket.
+// Whenever Y is numeric we collapse rows to their mean per X (per Z group)
+// to give one point per X — matching the customer reference plot's smooth
+// one-point-per-tick lines. Without this collapse the line zigzags wildly
+// within each X bucket (multiple devices may share the same X value
+// regardless of whether X is categorical or continuous).
 //
 // `xCategoryArray` (when xIsCat) gives the visual tick order; we sort by
 // indexOf into that array so the line follows the on-screen tick order.
@@ -1059,8 +1127,9 @@ function buildLineTraces({ rows, xField, yField, zField, axisRef, zCategoryValue
     });
   };
 
-  // Collapse rows to mean Y per X tick (used when X is categorical and Y is
-  // numeric — gives one point per tick, matching the reference plot).
+  // Collapse rows to mean Y per X (used whenever Y is numeric; works for
+  // both categorical and continuous X). Without this, a numeric X with
+  // many devices sharing the same value produces a vertical zigzag.
   const meanByX = (arr) => {
     const acc = new Map(); // xVal → { sum, n }
     for (const r of arr) {
@@ -1072,24 +1141,29 @@ function buildLineTraces({ rows, xField, yField, zField, axisRef, zCategoryValue
       slot.n += 1;
       acc.set(xv, slot);
     }
-    const cats = xCategoryArray || [];
-    const idx = (v) => {
-      const i = cats.indexOf(String(v));
-      return i < 0 ? Number.POSITIVE_INFINITY : i;
-    };
+    if (xIsCat) {
+      const cats = xCategoryArray || [];
+      const idx = (v) => {
+        const i = cats.indexOf(String(v));
+        return i < 0 ? Number.POSITIVE_INFINITY : i;
+      };
+      const out = [];
+      for (const [xv, { sum, n }] of acc) out.push({ [xKey]: xv, [yKey]: sum / n });
+      return out.sort((a, b) => idx(a[xKey]) - idx(b[xKey]));
+    }
     const out = [];
     for (const [xv, { sum, n }] of acc) out.push({ [xKey]: xv, [yKey]: sum / n });
-    return out.sort((a, b) => idx(a[xKey]) - idx(b[xKey]));
+    return out.sort((a, b) => a[xKey] - b[xKey]);
   };
 
-  // Build a single trace from a row subset, applying mean-per-X when
-  // appropriate.
-  const collapse = xIsCat && !yIsCat;
+  // Build a single trace from a row subset. When Y is numeric we collapse
+  // duplicate-X rows to their mean; otherwise we just sort.
+  const collapse = !yIsCat;
   const prep = collapse ? meanByX : sortRows;
 
   if (zField && zField.isCategorical) {
     const zKey = zField.name;
-    const zVals = zCategoryValues || distinctSortedValues(rows, zKey);
+    const zVals = zCategoryValues || distinctSortedValues(rows, zKey, { includeNull: true });
     let i = 0;
     for (const zv of zVals) {
       const grp = prep(rows.filter((r) => r[zKey] === zv));
@@ -1138,6 +1212,10 @@ const BUILDER_MAP = {
 const Z_NUMERIC_UNSUPPORTED = new Set(['box', 'violin', 'line']);
 
 const PERF_GL_THRESHOLD = 50000;
+// Hard ceiling on the number of distinct X categorical ticks per cell.
+// Beyond this Plotly renders unusably (browser stalls, ticks overlap).
+// We surface a warning and clamp the categoryarray to the head.
+const X_CATEGORY_TICK_LIMIT = 80;
 
 export function UnifiedChartGrid({
   chartType,
@@ -1148,44 +1226,47 @@ export function UnifiedChartGrid({
   height = 350,
   width = null,
   onPerformanceWarn,
+  onWarn,
 }) {
   const cols = (xFields || []).length;
   const nRows = (yFields || []).length;
-
-  if (cols === 0 || nRows === 0) {
-    return (
-      <div style={{ padding: 24, color: 'var(--fg-4)', fontSize: 12 }}>
-        请至少选一个 X / Y 字段
-      </div>
-    );
-  }
-
   const builder = BUILDER_MAP[chartType];
-  if (!builder) {
-    return (
-      <div style={{ padding: 24, color: 'var(--fg-4)', fontSize: 12 }}>
-        未知 chartType: {String(chartType)}
-      </div>
-    );
-  }
+  // Why not early-return here: useEffect calls below must run on every
+  // render in the same order. Defer the placeholder branch to the JSX.
+  const placeholder = cols === 0 || nRows === 0
+    ? '请至少选一个 X / Y 字段'
+    : !builder
+      ? `未知 chartType: ${String(chartType)}`
+      : null;
 
   // Effective Z: drop numeric Z for chart types that don't support it.
   const effZ = zField && Z_NUMERIC_UNSUPPORTED.has(chartType) && !zField.isCategorical
     ? null
     : zField || null;
+  // Collect warnings during render but defer dispatch to useEffect — calling
+  // onWarn (which setState's in the parent) inline triggers an extra render
+  // pass that re-runs trace construction.
+  const pendingWarns = [];
+  if (zField && Z_NUMERIC_UNSUPPORTED.has(chartType) && !zField.isCategorical) {
+    pendingWarns.push({ kind: 'z_numeric_dropped', chartType, zField: zField.name });
+  }
 
   // Performance: warn / disable scattergl when row count is huge.
   const useGl = rows.length < PERF_GL_THRESHOLD;
-  if (rows.length >= PERF_GL_THRESHOLD && onPerformanceWarn) {
-    onPerformanceWarn({ rowCount: rows.length, threshold: PERF_GL_THRESHOLD });
-  }
+  const perfWarn = rows.length >= PERF_GL_THRESHOLD
+    ? { rowCount: rows.length, threshold: PERF_GL_THRESHOLD }
+    : null;
 
   // Pre-compute Z categorical values once across the whole dataset, so
   // every cell's traces line up with the shared legend and color palette.
+  // includeNull=true 时 null/undefined 行被纳入 NULL_KEY ('∅') 桶展示，
+  // 而不是从所有 trace 里被静默 filter 掉。
   const zCategoryValues = effZ && effZ.isCategorical
-    ? distinctSortedValues(rows, effZ.name)
+    ? distinctSortedValues(rows, effZ.name, { includeNull: true })
     : null;
 
+  // Reserve extra right margin for the numeric Z colorbar (scatter only).
+  const hasNumericZ = effZ && !effZ.isCategorical && chartType === 'scatter';
   const allTraces = [];
   const layout = {
     ...baseLayout,
@@ -1194,10 +1275,10 @@ export function UnifiedChartGrid({
       columns: cols,
       pattern: 'independent',
       xgap: 0.08,
-      ygap: 0.12,
+      ygap: 0.16,
       roworder: 'top to bottom',
     },
-    margin: { l: 60, r: 80, t: 60, b: 60 },
+    margin: { l: 60, r: hasNumericZ ? 120 : 60, t: 60, b: 60 },
     height: nRows * height + 100,
     annotations: [],
     showlegend: !!effZ && effZ.isCategorical,
@@ -1211,7 +1292,10 @@ export function UnifiedChartGrid({
   // Cell that owns the shared color/legend artifact: the first cell.
   const COLOR_OWNER_CELL = 1;
 
-  for (let r = 0; r < nRows; r++) {
+  // Skip the trace-building loop when the grid is invalid (placeholder path).
+  // Hooks below still run unconditionally — that's the whole reason we don't
+  // early-return.
+  if (!placeholder) for (let r = 0; r < nRows; r++) {
     const yField = yFields[r];
     for (let c = 0; c < cols; c++) {
       const xField = xFields[c];
@@ -1236,7 +1320,21 @@ export function UnifiedChartGrid({
         || ((chartType === 'box' || chartType === 'violin') && !yIsCat);
       let xCategoryArray = null;
       if (xAsCategory) {
-        xCategoryArray = distinctSortedValues(rows, xField.name).map(String);
+        const allCats = distinctSortedValues(rows, xField.name).map(String);
+        if (allCats.length > X_CATEGORY_TICK_LIMIT) {
+          // Numeric X forced to category by box/violin produces one tick per
+          // distinct value. With 10k rows × 10k distinct values, Plotly
+          // hangs the browser. Clamp to the head and warn.
+          xCategoryArray = allCats.slice(0, X_CATEGORY_TICK_LIMIT);
+          pendingWarns.push({
+            kind: 'x_categories_clamped',
+            xField: xField.name,
+            total: allCats.length,
+            shown: X_CATEGORY_TICK_LIMIT,
+          });
+        } else {
+          xCategoryArray = allCats;
+        }
         xLayout.type = 'category';
         xLayout.categoryorder = 'array';
         xLayout.categoryarray = xCategoryArray;
@@ -1258,12 +1356,13 @@ export function UnifiedChartGrid({
       }
       layout[yAxisKey] = yLayout;
 
-      // Sub-plot title.
+      // Sub-plot title. y just above the cell's domain; kept tight so it
+      // doesn't collide with the next row up when nRows is small.
       layout.annotations.push({
         xref: `x${sfx} domain`,
         yref: `y${sfx} domain`,
         x: 0.5,
-        y: 1.08,
+        y: 1.04,
         text: `${axisTitle(yField)} vs ${axisTitle(xField)}`,
         showarrow: false,
         font: { size: 12, color: '#334155' },
@@ -1286,6 +1385,29 @@ export function UnifiedChartGrid({
       });
       allTraces.push(...cellTraces);
     }
+  }
+
+  // Dispatch collected warnings AFTER render commits — calling parent's
+  // setState during render would force a redundant re-render of the chart
+  // grid (which then re-collects the same warnings, etc.). useEffect runs
+  // post-commit so trace construction is not duplicated.
+  const warnsKey = JSON.stringify(pendingWarns);
+  useEffect(() => {
+    if (!onWarn) return;
+    for (const w of pendingWarns) onWarn(w);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [warnsKey, onWarn]);
+  useEffect(() => {
+    if (perfWarn && onPerformanceWarn) onPerformanceWarn(perfWarn);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [perfWarn?.rowCount, onPerformanceWarn]);
+
+  if (placeholder) {
+    return (
+      <div style={{ padding: 24, color: 'var(--fg-4)', fontSize: 12 }}>
+        {placeholder}
+      </div>
+    );
   }
 
   return (
