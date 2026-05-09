@@ -1,0 +1,390 @@
+- generic [ref=e3]:
+  - generic [ref=e4]:
+    - generic [ref=e5]:
+      - generic [ref=e6]: Σ
+      - generic [ref=e7]: ALN Resonator Data Platform
+      - generic [ref=e8]: v0.2 · build 2026.05.09
+    - generic [ref=e10]:
+      - generic [ref=e11]: api · ok
+      - generic [ref=e13]: pg · ok
+      - generic [ref=e15]: redis · ok
+  - generic [ref=e17]:
+    - link "Dashboard" [ref=e18] [cursor=pointer]:
+      - /url: /
+      - img [ref=e19]
+      - generic: Dashboard
+    - link "数据分析" [ref=e25] [cursor=pointer]:
+      - /url: /explore
+      - img [ref=e26]
+      - generic: 数据分析
+    - link "批次管理" [ref=e34] [cursor=pointer]:
+      - /url: /batches
+      - img [ref=e35]
+      - generic: 批次管理
+    - link "对照表" [ref=e41] [cursor=pointer]:
+      - /url: /mappings
+      - img [ref=e42]
+      - generic: 对照表
+    - link "上传" [ref=e46] [cursor=pointer]:
+      - /url: /upload
+      - img [ref=e47]
+      - generic: 上传
+    - link "任务" [ref=e49] [cursor=pointer]:
+      - /url: /tasks
+      - img [ref=e50]
+      - generic: 任务
+    - button "滤波器（二期）" [disabled] [ref=e56] [cursor=pointer]:
+      - img [ref=e57]
+      - generic: 滤波器（二期）
+    - button "设置" [ref=e60] [cursor=pointer]:
+      - img [ref=e61]
+      - generic: 设置
+  - generic [ref=e65]:
+    - generic [ref=e201]:
+      - link "批次管理" [ref=e202] [cursor=pointer]:
+        - /url: /batches
+      - generic [ref=e203]: ›
+      - generic [ref=e204]: T8901P.01
+    - generic [ref=e205]:
+      - generic [ref=e206]:
+        - generic [ref=e208]: 批次概览
+        - generic [ref=e209]:
+          - generic [ref=e210]:
+            - generic [ref=e212]: 对照表
+            - generic [ref=e213]: mapping_ELB003
+          - generic [ref=e214]:
+            - generic [ref=e216]: 器件数
+            - generic [ref=e217]: "23"
+          - generic [ref=e218]:
+            - generic [ref=e220]: fs 范围
+            - generic [ref=e221]: 全频段
+          - generic [ref=e222]:
+            - generic [ref=e224]: 处理类型
+            - generic [ref=e225]: S1P
+          - generic [ref=e226]:
+            - generic [ref=e228]: De-embed
+            - generic [ref=e229]: "NO"
+          - generic [ref=e230]:
+            - generic [ref=e232]: Wafer
+            - generic [ref=e233]: W1
+          - generic [ref=e234]:
+            - generic [ref=e236]: fs 中位 (GHz)
+            - generic [ref=e237]: "17.676"
+          - generic [ref=e238]:
+            - generic [ref=e240]: Pass 率
+            - generic [ref=e241]: 100.0%
+      - generic [ref=e242]:
+        - generic [ref=e243]:
+          - generic [ref=e244]: 器件列表
+          - generic [ref=e245]: 23 rows
+          - generic [ref=e246]:
+            - textbox "wafer" [ref=e247]
+            - combobox [ref=e248]:
+              - option "全部 P/F" [selected]
+              - option "Pass"
+              - option "Fail"
+        - table [ref=e250]:
+          - rowgroup [ref=e251]:
+            - row "ID Wafer Coord Mark fs (GHz) Qs k²eff (%) P/F" [ref=e252]:
+              - columnheader "ID" [ref=e253]
+              - columnheader "Wafer" [ref=e254]
+              - columnheader "Coord" [ref=e255]
+              - columnheader "Mark" [ref=e256]
+              - columnheader "fs (GHz)" [ref=e257]
+              - columnheader "Qs" [ref=e258]
+              - columnheader "k²eff (%)" [ref=e259]
+              - columnheader "P/F" [ref=e260]
+              - columnheader [ref=e261]
+          - rowgroup [ref=e262]:
+            - row "1 W1 X0Y0 E6-1 17.8760 250 1.55 Y" [ref=e263] [cursor=pointer]:
+              - cell "1" [ref=e264]
+              - cell "W1" [ref=e265]
+              - cell "X0Y0" [ref=e266]
+              - cell "E6-1" [ref=e267]
+              - cell "17.8760" [ref=e268]
+              - cell "250" [ref=e269]
+              - cell "1.55" [ref=e270]
+              - cell "Y" [ref=e271]
+              - cell [ref=e272]:
+                - button [ref=e273]:
+                  - img [ref=e274]
+            - row "2 W1 X0Y0 E6-1 14.6360 15 37.49 Y" [ref=e276] [cursor=pointer]:
+              - cell "2" [ref=e277]
+              - cell "W1" [ref=e278]
+              - cell "X0Y0" [ref=e279]
+              - cell "E6-1" [ref=e280]
+              - cell "14.6360" [ref=e281]
+              - cell "15" [ref=e282]
+              - cell "37.49" [ref=e283]
+              - cell "Y" [ref=e284]
+              - cell [ref=e285]:
+                - button [ref=e286]:
+                  - img [ref=e287]
+            - row "3 W1 X0Y1 E6-1 17.7270 110 1.77 Y" [ref=e289] [cursor=pointer]:
+              - cell "3" [ref=e290]
+              - cell "W1" [ref=e291]
+              - cell "X0Y1" [ref=e292]
+              - cell "E6-1" [ref=e293]
+              - cell "17.7270" [ref=e294]
+              - cell "110" [ref=e295]
+              - cell "1.77" [ref=e296]
+              - cell "Y" [ref=e297]
+              - cell [ref=e298]:
+                - button [ref=e299]:
+                  - img [ref=e300]
+            - row "4 W1 X0Y1 E6-1 14.7160 7 36.18 Y" [ref=e302] [cursor=pointer]:
+              - cell "4" [ref=e303]
+              - cell "W1" [ref=e304]
+              - cell "X0Y1" [ref=e305]
+              - cell "E6-1" [ref=e306]
+              - cell "14.7160" [ref=e307]
+              - cell "7" [ref=e308]
+              - cell "36.18" [ref=e309]
+              - cell "Y" [ref=e310]
+              - cell [ref=e311]:
+                - button [ref=e312]:
+                  - img [ref=e313]
+            - row "5 W1 X0Y0 E6-2 17.8690 225 1.57 Y" [ref=e315] [cursor=pointer]:
+              - cell "5" [ref=e316]
+              - cell "W1" [ref=e317]
+              - cell "X0Y0" [ref=e318]
+              - cell "E6-2" [ref=e319]
+              - cell "17.8690" [ref=e320]
+              - cell "225" [ref=e321]
+              - cell "1.57" [ref=e322]
+              - cell "Y" [ref=e323]
+              - cell [ref=e324]:
+                - button [ref=e325]:
+                  - img [ref=e326]
+            - row "6 W1 X0Y0 E6-2 15.6770 2 27.77 Y" [ref=e328] [cursor=pointer]:
+              - cell "6" [ref=e329]
+              - cell "W1" [ref=e330]
+              - cell "X0Y0" [ref=e331]
+              - cell "E6-2" [ref=e332]
+              - cell "15.6770" [ref=e333]
+              - cell "2" [ref=e334]
+              - cell "27.77" [ref=e335]
+              - cell "Y" [ref=e336]
+              - cell [ref=e337]:
+                - button [ref=e338]:
+                  - img [ref=e339]
+            - row "7 W1 X0Y1 E6-2 17.6760 167 1.76 Y" [ref=e341] [cursor=pointer]:
+              - cell "7" [ref=e342]
+              - cell "W1" [ref=e343]
+              - cell "X0Y1" [ref=e344]
+              - cell "E6-2" [ref=e345]
+              - cell "17.6760" [ref=e346]
+              - cell "167" [ref=e347]
+              - cell "1.76" [ref=e348]
+              - cell "Y" [ref=e349]
+              - cell [ref=e350]:
+                - button [ref=e351]:
+                  - img [ref=e352]
+            - row "8 W1 X0Y1 E6-2 16.0230 2 22.90 Y" [ref=e354] [cursor=pointer]:
+              - cell "8" [ref=e355]
+              - cell "W1" [ref=e356]
+              - cell "X0Y1" [ref=e357]
+              - cell "E6-2" [ref=e358]
+              - cell "16.0230" [ref=e359]
+              - cell "2" [ref=e360]
+              - cell "22.90" [ref=e361]
+              - cell "Y" [ref=e362]
+              - cell [ref=e363]:
+                - button [ref=e364]:
+                  - img [ref=e365]
+            - row "9 W1 X0Y0 E6-3 17.8450 171 2.03 Y" [ref=e367] [cursor=pointer]:
+              - cell "9" [ref=e368]
+              - cell "W1" [ref=e369]
+              - cell "X0Y0" [ref=e370]
+              - cell "E6-3" [ref=e371]
+              - cell "17.8450" [ref=e372]
+              - cell "171" [ref=e373]
+              - cell "2.03" [ref=e374]
+              - cell "Y" [ref=e375]
+              - cell [ref=e376]:
+                - button [ref=e377]:
+                  - img [ref=e378]
+            - row "10 W1 X0Y0 E6-3 16.3490 19 20.58 Y" [ref=e380] [cursor=pointer]:
+              - cell "10" [ref=e381]
+              - cell "W1" [ref=e382]
+              - cell "X0Y0" [ref=e383]
+              - cell "E6-3" [ref=e384]
+              - cell "16.3490" [ref=e385]
+              - cell "19" [ref=e386]
+              - cell "20.58" [ref=e387]
+              - cell "Y" [ref=e388]
+              - cell [ref=e389]:
+                - button [ref=e390]:
+                  - img [ref=e391]
+            - row "11 W1 X0Y1 E6-3 17.6570 147 2.16 Y" [ref=e393] [cursor=pointer]:
+              - cell "11" [ref=e394]
+              - cell "W1" [ref=e395]
+              - cell "X0Y1" [ref=e396]
+              - cell "E6-3" [ref=e397]
+              - cell "17.6570" [ref=e398]
+              - cell "147" [ref=e399]
+              - cell "2.16" [ref=e400]
+              - cell "Y" [ref=e401]
+              - cell [ref=e402]:
+                - button [ref=e403]:
+                  - img [ref=e404]
+            - row "12 W1 X0Y1 E6-3 18.9800 4 11.05 Y" [ref=e406] [cursor=pointer]:
+              - cell "12" [ref=e407]
+              - cell "W1" [ref=e408]
+              - cell "X0Y1" [ref=e409]
+              - cell "E6-3" [ref=e410]
+              - cell "18.9800" [ref=e411]
+              - cell "4" [ref=e412]
+              - cell "11.05" [ref=e413]
+              - cell "Y" [ref=e414]
+              - cell [ref=e415]:
+                - button [ref=e416]:
+                  - img [ref=e417]
+            - row "13 W1 X0Y0 E6-4 17.8160 121 2.50 Y" [ref=e419] [cursor=pointer]:
+              - cell "13" [ref=e420]
+              - cell "W1" [ref=e421]
+              - cell "X0Y0" [ref=e422]
+              - cell "E6-4" [ref=e423]
+              - cell "17.8160" [ref=e424]
+              - cell "121" [ref=e425]
+              - cell "2.50" [ref=e426]
+              - cell "Y" [ref=e427]
+              - cell [ref=e428]:
+                - button [ref=e429]:
+                  - img [ref=e430]
+            - row "14 W1 X0Y0 E6-4 16.6310 2 17.35 Y" [ref=e432] [cursor=pointer]:
+              - cell "14" [ref=e433]
+              - cell "W1" [ref=e434]
+              - cell "X0Y0" [ref=e435]
+              - cell "E6-4" [ref=e436]
+              - cell "16.6310" [ref=e437]
+              - cell "2" [ref=e438]
+              - cell "17.35" [ref=e439]
+              - cell "Y" [ref=e440]
+              - cell [ref=e441]:
+                - button [ref=e442]:
+                  - img [ref=e443]
+            - row "15 W1 X0Y1 E6-4 17.6250 126 2.55 Y" [ref=e445] [cursor=pointer]:
+              - cell "15" [ref=e446]
+              - cell "W1" [ref=e447]
+              - cell "X0Y1" [ref=e448]
+              - cell "E6-4" [ref=e449]
+              - cell "17.6250" [ref=e450]
+              - cell "126" [ref=e451]
+              - cell "2.55" [ref=e452]
+              - cell "Y" [ref=e453]
+              - cell [ref=e454]:
+                - button [ref=e455]:
+                  - img [ref=e456]
+            - row "16 W1 X0Y1 E6-4 19.3640 4 6.48 Y" [ref=e458] [cursor=pointer]:
+              - cell "16" [ref=e459]
+              - cell "W1" [ref=e460]
+              - cell "X0Y1" [ref=e461]
+              - cell "E6-4" [ref=e462]
+              - cell "19.3640" [ref=e463]
+              - cell "4" [ref=e464]
+              - cell "6.48" [ref=e465]
+              - cell "Y" [ref=e466]
+              - cell [ref=e467]:
+                - button [ref=e468]:
+                  - img [ref=e469]
+            - row "17 W1 X0Y0 E6-5 17.7500 81 3.37 Y" [ref=e471] [cursor=pointer]:
+              - cell "17" [ref=e472]
+              - cell "W1" [ref=e473]
+              - cell "X0Y0" [ref=e474]
+              - cell "E6-5" [ref=e475]
+              - cell "17.7500" [ref=e476]
+              - cell "81" [ref=e477]
+              - cell "3.37" [ref=e478]
+              - cell "Y" [ref=e479]
+              - cell [ref=e480]:
+                - button [ref=e481]:
+                  - img [ref=e482]
+            - row "18 W1 X0Y0 E6-5 19.6660 12 3.71 Y" [ref=e484] [cursor=pointer]:
+              - cell "18" [ref=e485]
+              - cell "W1" [ref=e486]
+              - cell "X0Y0" [ref=e487]
+              - cell "E6-5" [ref=e488]
+              - cell "19.6660" [ref=e489]
+              - cell "12" [ref=e490]
+              - cell "3.71" [ref=e491]
+              - cell "Y" [ref=e492]
+              - cell [ref=e493]:
+                - button [ref=e494]:
+                  - img [ref=e495]
+            - row "19 W1 X0Y1 E6-5 17.5490 59 3.56 Y" [ref=e497] [cursor=pointer]:
+              - cell "19" [ref=e498]
+              - cell "W1" [ref=e499]
+              - cell "X0Y1" [ref=e500]
+              - cell "E6-5" [ref=e501]
+              - cell "17.5490" [ref=e502]
+              - cell "59" [ref=e503]
+              - cell "3.56" [ref=e504]
+              - cell "Y" [ref=e505]
+              - cell [ref=e506]:
+                - button [ref=e507]:
+                  - img [ref=e508]
+            - row "20 W1 X0Y1 E6-5 19.6810 6 1.62 Y" [ref=e510] [cursor=pointer]:
+              - cell "20" [ref=e511]
+              - cell "W1" [ref=e512]
+              - cell "X0Y1" [ref=e513]
+              - cell "E6-5" [ref=e514]
+              - cell "19.6810" [ref=e515]
+              - cell "6" [ref=e516]
+              - cell "1.62" [ref=e517]
+              - cell "Y" [ref=e518]
+              - cell [ref=e519]:
+                - button [ref=e520]:
+                  - img [ref=e521]
+            - row "21 W1 X0Y0 E6-6 17.6450 47 4.71 Y" [ref=e523] [cursor=pointer]:
+              - cell "21" [ref=e524]
+              - cell "W1" [ref=e525]
+              - cell "X0Y0" [ref=e526]
+              - cell "E6-6" [ref=e527]
+              - cell "17.6450" [ref=e528]
+              - cell "47" [ref=e529]
+              - cell "4.71" [ref=e530]
+              - cell "Y" [ref=e531]
+              - cell [ref=e532]:
+                - button [ref=e533]:
+                  - img [ref=e534]
+            - row "22 W1 X0Y0 E6-6 19.8450 21 1.85 Y" [ref=e536] [cursor=pointer]:
+              - cell "22" [ref=e537]
+              - cell "W1" [ref=e538]
+              - cell "X0Y0" [ref=e539]
+              - cell "E6-6" [ref=e540]
+              - cell "19.8450" [ref=e541]
+              - cell "21" [ref=e542]
+              - cell "1.85" [ref=e543]
+              - cell "Y" [ref=e544]
+              - cell [ref=e545]:
+                - button [ref=e546]:
+                  - img [ref=e547]
+            - row "23 W1 X0Y1 E6-6 17.4350 30 4.88 Y" [ref=e549] [cursor=pointer]:
+              - cell "23" [ref=e550]
+              - cell "W1" [ref=e551]
+              - cell "X0Y1" [ref=e552]
+              - cell "E6-6" [ref=e553]
+              - cell "17.4350" [ref=e554]
+              - cell "30" [ref=e555]
+              - cell "4.88" [ref=e556]
+              - cell "Y" [ref=e557]
+              - cell [ref=e558]:
+                - button [ref=e559]:
+                  - img [ref=e560]
+        - generic [ref=e562]:
+          - button [disabled] [ref=e563] [cursor=pointer]:
+            - img [ref=e564]
+          - generic [ref=e566]: 1 / 1
+          - button [disabled] [ref=e567] [cursor=pointer]:
+            - img [ref=e568]
+  - generic [ref=e120]:
+    - generic [ref=e121]: CONNECTED
+    - generic [ref=e123]: PostgreSQL 15
+    - generic [ref=e124]: Redis · 7
+    - generic [ref=e125]: Celery
+    - generic [ref=e126]:
+      - text: "path:"
+      - generic [ref=e127]: /batches/T8901P.01
+    - generic [ref=e128]: "tz: Asia/Shanghai"
+    - generic [ref=e129]: © aln-data 2026

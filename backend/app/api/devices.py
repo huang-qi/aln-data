@@ -18,12 +18,15 @@ router = APIRouter(prefix="/devices", tags=["devices"])
 _PARAM_CHOICES = ("s11_db", "s11_phase", "s11_re_im", "z_mag_db", "z_phase")
 
 
-def _resolve_sparam_path(rel_or_abs: str) -> Path:
+def _resolve_sparam_path(rel_or_abs: str, batch_no: str | None = None) -> Path:
     settings = get_settings()
     p = Path(rel_or_abs)
     if p.is_absolute():
         return p
-    return settings.files_dir / p
+    base = settings.files_dir
+    if batch_no:
+        base = base / batch_no
+    return base / p
 
 
 @router.get("/{device_id}/sparam")
@@ -43,7 +46,8 @@ def device_sparam(
     if not device.s_param_path:
         raise HTTPException(status_code=404, detail="该器件没有 S 参数文件")
 
-    path = _resolve_sparam_path(device.s_param_path)
+    batch_no = device.batch.batch_no if device.batch else None
+    path = _resolve_sparam_path(device.s_param_path, batch_no=batch_no)
     if not path.exists():
         raise HTTPException(status_code=404, detail=f"S 参数文件不存在: {path}")
 
