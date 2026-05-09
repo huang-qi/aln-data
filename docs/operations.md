@@ -6,6 +6,8 @@
 
 本手册聚焦**日常运维**和**故障处理**，不重复部署流程。所有命令均可直接复制执行；命令里的容器名、端口、路径均与 `deploy/docker-compose.yml` 一致。
 
+> **路径约定**：命令中的 `$REPO` 指本仓库 clone 后的根目录，`$DATA_ROOT` 指 `.env` 中的 `DATA_ROOT`（默认 `/data3/aln`）。值班前请先 `export REPO=/your/path/to/aln-data`。
+
 ---
 
 ## 1. 服务状态速查
@@ -13,7 +15,7 @@
 ### 1.1 一行命令看全栈
 
 ```bash
-cd /home/qi.huang/aln-data/deploy && podman compose ps
+cd $REPO/deploy && podman compose ps
 ```
 
 正常输出（5 行 Up）：
@@ -77,7 +79,7 @@ podman stats --no-stream
 ### 2.1 重启单个服务
 
 ```bash
-cd /home/qi.huang/aln-data/deploy
+cd $REPO/deploy
 podman compose restart api      # 改 .env 后只重 api
 podman compose restart worker   # 调 concurrency / 算法代码
 podman compose restart nginx    # 改 nginx 配置 / 前端 dist
@@ -98,7 +100,7 @@ podman compose restart nginx    # 改 nginx 配置 / 前端 dist
 正确顺序：先停应用层，再停数据层；启动反过来。
 
 ```bash
-cd /home/qi.huang/aln-data/deploy
+cd $REPO/deploy
 
 # 停（顺序：api → worker → nginx → redis → postgres）
 podman compose stop nginx api worker
@@ -120,7 +122,7 @@ podman compose up -d      # 全部起来
 ### 2.3 升级代码（最常见）
 
 ```bash
-cd /home/qi.huang/aln-data
+cd $REPO
 git pull
 cd deploy
 
@@ -129,9 +131,9 @@ podman compose build api worker
 podman compose up -d api worker
 
 # 前端改动
-cd /home/qi.huang/aln-data/frontend
+cd $REPO/frontend
 npm ci && npm run build
-cd /home/qi.huang/aln-data/deploy
+cd $REPO/deploy
 podman compose restart nginx
 ```
 
@@ -139,7 +141,7 @@ podman compose restart nginx
 
 ```bash
 # 先停应用层（避免老代码读新表）
-cd /home/qi.huang/aln-data/deploy
+cd $REPO/deploy
 podman compose stop api worker
 
 # 跑迁移（容器内执行）
@@ -152,7 +154,7 @@ podman compose up -d api worker
 容器外跑 alembic（开发机有 venv 时）：
 
 ```bash
-cd /home/qi.huang/aln-data/backend
+cd $REPO/backend
 DATABASE_URL=postgresql+psycopg://aln:$(grep POSTGRES_PASSWORD ../.env | cut -d= -f2)@127.0.0.1:15432/aln \
   uv run alembic upgrade head
 ```
@@ -163,7 +165,7 @@ DATABASE_URL=postgresql+psycopg://aln:$(grep POSTGRES_PASSWORD ../.env | cut -d=
 
 ```bash
 # 改 deploy/docker-compose.yml 的 image tag，然后
-cd /home/qi.huang/aln-data/deploy
+cd $REPO/deploy
 podman compose pull postgres
 podman compose up -d postgres
 podman compose logs -f postgres   # 看启动日志
@@ -242,7 +244,7 @@ podman exec aln-postgres psql -U aln -c "DROP DATABASE aln_restore_test;"
 误操作（误删批次、迁移出错、被 truncate 等）：
 
 ```bash
-cd /home/qi.huang/aln-data/deploy
+cd $REPO/deploy
 
 # 1) 立即停应用，防止脏写继续
 podman compose stop api worker nginx
@@ -324,7 +326,7 @@ GROUP BY status;
 
 ### 4.2 简单告警脚本
 
-`/home/qi.huang/aln-data/scripts/health_alert.sh`：
+`$REPO/scripts/health_alert.sh`：
 
 ```bash
 #!/usr/bin/env bash
@@ -382,10 +384,10 @@ fi
 启用：
 
 ```bash
-chmod +x /home/qi.huang/aln-data/scripts/health_alert.sh
+chmod +x $REPO/scripts/health_alert.sh
 crontab -e
 # 加入：
-# 0 */6 * * * /home/qi.huang/aln-data/scripts/health_alert.sh
+# 0 */6 * * * $REPO/scripts/health_alert.sh
 ```
 
 ### 4.3 接入 Grafana / Prometheus（二期）
@@ -465,7 +467,7 @@ DELETE FROM upload_tasks WHERE status='failed' AND started_at < now() - INTERVAL
 #    若直接 200 + 内容长度 = 0，多半是 nginx 在 buffering
 
 # 2. 检查 nginx 配置中的 proxy_buffering
-grep -n proxy_buffering /home/qi.huang/aln-data/deploy/nginx/default.conf
+grep -n proxy_buffering $REPO/deploy/nginx/default.conf
 # 期望看到 proxy_buffering off; 在 SSE 路由块里
 
 # 3. 验证 worker 是否往 Redis publish
@@ -603,7 +605,7 @@ find /data3/aln/backups -name 'aln_*.sql.gz' -mtime +30 -delete
 podman system prune -f
 ```
 
-一键清理脚本 `/home/qi.huang/aln-data/scripts/cleanup.sh`：
+一键清理脚本 `$REPO/scripts/cleanup.sh`：
 
 ```bash
 #!/usr/bin/env bash
@@ -628,7 +630,7 @@ LOG=/data3/aln/logs/cleanup.log
 cron：
 
 ```
-30 1 * * * /home/qi.huang/aln-data/scripts/cleanup.sh
+30 1 * * * $REPO/scripts/cleanup.sh
 ```
 
 ### 5.8 CORS 报错（前端联调）
@@ -663,7 +665,7 @@ podman logs --tail 200 aln-worker
 
 ```bash
 podman run -it --rm --entrypoint sh \
-  --env-file /home/qi.huang/aln-data/.env \
+  --env-file $REPO/.env \
   -v /data3/aln:/data \
   --network aln_default \
   localhost/deploy_api:latest
@@ -804,10 +806,10 @@ NEW_PWD='new_strong_password_here'
 podman exec aln-postgres psql -U aln -c "ALTER USER aln WITH PASSWORD '${NEW_PWD}';"
 
 # 2. 同步 .env
-sed -i.bak "s|^POSTGRES_PASSWORD=.*|POSTGRES_PASSWORD=${NEW_PWD}|" /home/qi.huang/aln-data/.env
+sed -i.bak "s|^POSTGRES_PASSWORD=.*|POSTGRES_PASSWORD=${NEW_PWD}|" $REPO/.env
 
 # 3. 重建依赖该密码的容器（api/worker 通过 DATABASE_URL 拼接，必须重启读 .env）
-cd /home/qi.huang/aln-data/deploy
+cd $REPO/deploy
 podman compose up -d --force-recreate api worker
 
 # 4. 验证
@@ -822,10 +824,10 @@ postgres 容器本身不需要重建——`POSTGRES_PASSWORD` 仅在首次初始
 
 | 路径 | 作用 | 备份重要性 |
 |---|---|---|
-| `/home/qi.huang/aln-data/.env` | 敏感配置（密码、端口） | 高，写入运维记录 |
-| `/home/qi.huang/aln-data/deploy/docker-compose.yml` | 编排定义 | 跟代码 git 走 |
-| `/home/qi.huang/aln-data/deploy/nginx/default.conf` | 反代 / SSE / 上传超时 | 跟代码 git 走 |
-| `/home/qi.huang/aln-data/backend/alembic/versions/` | DB 迁移脚本 | 跟代码 git 走 |
+| `$REPO/.env` | 敏感配置（密码、端口） | 高，写入运维记录 |
+| `$REPO/deploy/docker-compose.yml` | 编排定义 | 跟代码 git 走 |
+| `$REPO/deploy/nginx/default.conf` | 反代 / SSE / 上传超时 | 跟代码 git 走 |
+| `$REPO/backend/alembic/versions/` | DB 迁移脚本 | 跟代码 git 走 |
 | `/data3/aln/pgdata/` | PostgreSQL 数据，**不可恢复**重要数据 | 极高，每日 dump |
 | `/data3/aln/redis/` | Redis AOF（任务队列） | 中等，丢了任务要重传 |
 | `/data3/aln/uploads/` | 用户原始 zip（7 天保留） | 低 |

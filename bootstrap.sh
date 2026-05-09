@@ -13,7 +13,9 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 COMPOSE_FILE="${SCRIPT_DIR}/deploy/docker-compose.yml"
 ENV_FILE="${SCRIPT_DIR}/.env"
 ENV_EXAMPLE="${SCRIPT_DIR}/.env.example"
-DATA_ROOT="/data3/aln"
+# DATA_ROOT 从 .env 读，无 .env 时回落到默认；保证脚本与 docker-compose 看到同一份值
+DATA_ROOT_DEFAULT="/data3/aln"
+DATA_ROOT=""  # 由 load_data_root 在校验完 .env 后填充
 DATA_SUBDIRS=(pgdata redis uploads files mappings exports logs/api logs/worker)
 FRONTEND_DIST="${SCRIPT_DIR}/frontend/dist"
 
@@ -52,6 +54,18 @@ get_nginx_port() {
     echo "${NGINX_PORT_DEFAULT}"
 }
 
+load_data_root() {
+    if [[ -f "${ENV_FILE}" ]]; then
+        local v
+        v="$(grep -E '^DATA_ROOT=' "${ENV_FILE}" | tail -n1 | cut -d= -f2- || true)"
+        if [[ -n "${v}" ]]; then
+            DATA_ROOT="${v}"
+            return
+        fi
+    fi
+    DATA_ROOT="${DATA_ROOT_DEFAULT}"
+}
+
 compose() {
     podman compose -f "${COMPOSE_FILE}" --env-file "${ENV_FILE}" "$@"
 }
@@ -63,7 +77,8 @@ check_env_file() {
         log_info  "请先执行：cp ${ENV_EXAMPLE} ${ENV_FILE}  并修改 POSTGRES_PASSWORD"
         exit 1
     fi
-    log_ok ".env 已就位"
+    load_data_root
+    log_ok ".env 已就位（DATA_ROOT=${DATA_ROOT}）"
 }
 
 check_podman() {
@@ -261,7 +276,7 @@ main() {
 
   up      启动全部 5 容器（默认）
   down    停止全部容器（保留数据）
-  reset   销毁容器 + 删除 ${DATA_ROOT} 业务数据（需二次确认）
+  reset   销毁容器 + 删除 \$DATA_ROOT 业务数据（路径由 .env 中的 DATA_ROOT 决定，默认 ${DATA_ROOT_DEFAULT}），需二次确认
   status  查看容器状态 + /api/health + 磁盘
 
 环境变量：

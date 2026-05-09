@@ -1,7 +1,7 @@
 # 谐振器数据平台 - podman compose 编排
 # 启动：podman compose -f deploy/docker-compose.yml --env-file .env up -d
 # 停止：podman compose -f deploy/docker-compose.yml down
-# 数据全部挂在 /data3/aln/，代码外部 build context 在 ../
+# 数据全部挂在 ${DATA_ROOT}/，由 .env 控制；代码外部 build context 在 ../
 
 version: "3.9"
 
@@ -16,7 +16,7 @@ services:
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?need POSTGRES_PASSWORD in .env}
       PGDATA: /var/lib/postgresql/data/pgdata
     volumes:
-      - /data3/aln/pgdata:/var/lib/postgresql/data
+      - ${DATA_ROOT:?need DATA_ROOT in .env}/pgdata:/var/lib/postgresql/data
     ports:
       - "15432:5432"  # 全接口绑定，便于容器走 host-gateway 回连
     healthcheck:
@@ -31,7 +31,7 @@ services:
     restart: unless-stopped
     command: ["redis-server", "--appendonly", "yes", "--dir", "/data"]
     volumes:
-      - /data3/aln/redis:/data
+      - ${DATA_ROOT:?need DATA_ROOT in .env}/redis:/data
     ports:
       - "6379:6379"
     healthcheck:
@@ -58,7 +58,7 @@ services:
       UPLOAD_MAX_GB: ${UPLOAD_MAX_GB:-20}
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
     volumes:
-      - /data3/aln:/data
+      - ${DATA_ROOT:?need DATA_ROOT in .env}:/data
     extra_hosts:
       - "host.containers.internal:host-gateway"
     ports:
@@ -83,7 +83,7 @@ services:
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
       C_FORCE_ROOT: "true"  # 容器内运行 celery
     volumes:
-      - /data3/aln:/data
+      - ${DATA_ROOT:?need DATA_ROOT in .env}:/data
     extra_hosts:
       - "host.containers.internal:host-gateway"
     command: ["celery", "-A", "app.workers", "worker", "--loglevel=info", "--concurrency=${WORKER_CONCURRENCY:-4}"]
@@ -101,7 +101,7 @@ services:
     volumes:
       - ./nginx/default.conf:/etc/nginx/conf.d/default.conf:ro
       - ../frontend/dist:/usr/share/nginx/html:ro
-      - /data3/aln/exports:/exports:ro
+      - ${DATA_ROOT:?need DATA_ROOT in .env}/exports:/exports:ro
     healthcheck:
       # rootless podman 下容器内 localhost(::1) 不通；nginx 监听 0.0.0.0:80，要走 127.0.0.1
       # 走 nginx 自己的 /healthz（不依赖上游 api 即可探活 nginx 本身）

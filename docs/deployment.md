@@ -4,6 +4,9 @@
 **部署方式**：Podman Compose
 **目标机**：fineserver（Rocky Linux 8.10，Podman 4.9.4）
 
+> **路径约定**：下文所有 `$REPO` 指本仓库 clone 后的根目录。先 `export REPO=/your/path/to/aln-data` 一次，命令即可直接复制执行。
+> `$DATA_ROOT` 同理（即 `.env` 中的 `DATA_ROOT`，默认 `/data3/aln`）。
+
 ---
 
 ## 1. 总览
@@ -34,7 +37,7 @@ sudo chown -R $USER:$USER /data3/aln
 ### 2.2 准备环境变量
 
 ```bash
-cd /home/qi.huang/aln-data
+cd $REPO
 cp .env.example .env
 # 编辑 .env，至少修改 POSTGRES_PASSWORD
 ```
@@ -42,7 +45,7 @@ cp .env.example .env
 ### 2.3 拉取镜像 + 构建
 
 ```bash
-cd /home/qi.huang/aln-data/deploy
+cd $REPO/deploy
 podman compose --env-file ../.env build
 podman compose --env-file ../.env pull
 ```
@@ -114,7 +117,7 @@ podman exec -it aln-postgres psql -U aln
 ### 3.4 升级代码
 
 ```bash
-cd /home/qi.huang/aln-data
+cd $REPO
 git pull
 cd deploy
 podman compose build api worker
@@ -126,7 +129,7 @@ podman compose run --rm api alembic upgrade head
 ### 3.5 升级前端
 
 ```bash
-cd /home/qi.huang/aln-data/frontend
+cd $REPO/frontend
 npm ci
 npm run build         # 输出到 frontend/dist
 podman compose restart nginx  # nginx 直接读 dist 卷，重启即可
@@ -244,7 +247,7 @@ podman exec -it aln-postgres psql -U aln aln -c "EXPLAIN ANALYZE SELECT ..."
 ### 7.1 完全清理（保留数据）
 
 ```bash
-cd /home/qi.huang/aln-data/deploy
+cd $REPO/deploy
 podman compose down
 ```
 

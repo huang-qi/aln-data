@@ -5,6 +5,8 @@
 - **最近提交**：`14a72f5 阶段 4：前端 Vite 工程 + 全栈容器化跑通`
 - **走查方式**：playwright（Chromium）真实打开 `http://localhost:18080/`，逐页快照 + 截图
 
+> **路径约定**：下文 `$REPO` 指本仓库 clone 后的根目录（`export REPO=/your/path/to/aln-data` 一次即可）。
+
 ---
 
 ## 1. TL;DR
@@ -136,7 +138,7 @@ def _resolve_sparam_path(rel_or_abs: str, batch_no: str | None = None) -> Path:
 **部署方法**：
 
 ```bash
-cd /home/qi.huang/aln-data/deploy
+cd $REPO/deploy
 podman compose --env-file ../.env build api
 podman compose --env-file ../.env up -d --no-deps api
 ```
@@ -171,7 +173,7 @@ podman compose --env-file ../.env up -d --no-deps api
 ### 6.1 全栈启动
 
 ```bash
-cd /home/qi.huang/aln-data
+cd $REPO
 ./bootstrap.sh up
 # 浏览器打开 http://localhost:18080
 ```
@@ -234,8 +236,8 @@ cd /home/qi.huang/aln-data
 ## 附：本次走查的产物
 
 ```
-/home/qi.huang/aln-data/docs/READY-TO-USE.md           ← 本文
-/home/qi.huang/aln-data/docs/screenshots/
+$REPO/docs/READY-TO-USE.md           ← 本文
+$REPO/docs/screenshots/
     aln-shot-01-dashboard.png
     aln-shot-02-batch-detail.png
     aln-shot-03-explore.png
