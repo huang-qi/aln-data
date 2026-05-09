@@ -787,7 +787,13 @@ function buildScatterTraces({ rows, xField, yField, zField, axisRef, useGl, zCat
 // Y categorical:        horizontal boxes (orientation 'h'), one per Y category;
 //                       distribution along X (numeric). If zField categorical,
 //                       split each Y row by Z (boxmode 'group').
-function buildBoxTraces({ rows, xField, yField, zField, axisRef, zCategoryValues, showLegend }) {
+//
+// `cellGroup` is a unique-per-cell string used as `offsetgroup` so that
+// plotly's boxmode='group' allocates side-by-side slots PER CELL — not
+// across cells. Without this, two cells in the same row whose traces
+// happen to share a name (e.g. both named after Y) end up sharing a
+// global slot table and shift their boxes off-tick.
+function buildBoxTraces({ rows, xField, yField, zField, axisRef, zCategoryValues, showLegend, cellGroup }) {
   const xKey = xField.name;
   const yKey = yField.name;
   const xref = `x${axisRef}`;
@@ -812,6 +818,8 @@ function buildBoxTraces({ rows, xField, yField, zField, axisRef, zCategoryValues
           yaxis: yref,
           name: String(zv),
           legendgroup: String(zv),
+          offsetgroup: `${cellGroup}::${zv}`,
+          alignmentgroup: cellGroup,
           showlegend: showLegend,
           marker: { color: PALETTE[i % PALETTE.length] },
           boxpoints: 'outliers',
@@ -830,6 +838,8 @@ function buildBoxTraces({ rows, xField, yField, zField, axisRef, zCategoryValues
         xaxis: xref,
         yaxis: yref,
         name: axisTitle(xField),
+        offsetgroup: cellGroup,
+        alignmentgroup: cellGroup,
         showlegend: false,
         marker: { color: PALETTE[0] },
         boxpoints: 'outliers',
@@ -852,6 +862,8 @@ function buildBoxTraces({ rows, xField, yField, zField, axisRef, zCategoryValues
         yaxis: yref,
         name: String(zv),
         legendgroup: String(zv),
+        offsetgroup: `${cellGroup}::${zv}`,
+        alignmentgroup: cellGroup,
         showlegend: showLegend,
         marker: { color: PALETTE[i % PALETTE.length] },
         boxpoints: 'outliers',
@@ -871,6 +883,8 @@ function buildBoxTraces({ rows, xField, yField, zField, axisRef, zCategoryValues
       xaxis: xref,
       yaxis: yref,
       name: axisTitle(yField),
+      offsetgroup: cellGroup,
+      alignmentgroup: cellGroup,
       showlegend: false,
       marker: { color: PALETTE[0] },
       boxpoints: 'outliers',
@@ -880,7 +894,9 @@ function buildBoxTraces({ rows, xField, yField, zField, axisRef, zCategoryValues
 }
 
 // Violin plot for one cell. Y categorical → horizontal violin (one per Y).
-function buildViolinTraces({ rows, xField, yField, zField, axisRef, zCategoryValues, showLegend }) {
+//
+// `cellGroup` is a unique-per-cell offsetgroup; see buildBoxTraces for why.
+function buildViolinTraces({ rows, xField, yField, zField, axisRef, zCategoryValues, showLegend, cellGroup }) {
   const xKey = xField.name;
   const yKey = yField.name;
   const xref = `x${axisRef}`;
@@ -905,6 +921,8 @@ function buildViolinTraces({ rows, xField, yField, zField, axisRef, zCategoryVal
           yaxis: yref,
           name: String(zv),
           legendgroup: String(zv),
+          offsetgroup: `${cellGroup}::${zv}`,
+          alignmentgroup: cellGroup,
           showlegend: showLegend,
           box: { visible: true },
           meanline: { visible: true },
@@ -928,6 +946,8 @@ function buildViolinTraces({ rows, xField, yField, zField, axisRef, zCategoryVal
         xaxis: xref,
         yaxis: yref,
         name: axisTitle(xField),
+        offsetgroup: cellGroup,
+        alignmentgroup: cellGroup,
         showlegend: false,
         box: { visible: true },
         meanline: { visible: true },
@@ -956,6 +976,8 @@ function buildViolinTraces({ rows, xField, yField, zField, axisRef, zCategoryVal
         yaxis: yref,
         name: String(zv),
         legendgroup: String(zv),
+        offsetgroup: `${cellGroup}::${zv}`,
+        alignmentgroup: cellGroup,
         showlegend: showLegend,
         box: { visible: true },
         meanline: { visible: true },
@@ -980,6 +1002,8 @@ function buildViolinTraces({ rows, xField, yField, zField, axisRef, zCategoryVal
       xaxis: xref,
       yaxis: yref,
       name: axisTitle(yField),
+      offsetgroup: cellGroup,
+      alignmentgroup: cellGroup,
       showlegend: false,
       box: { visible: true },
       meanline: { visible: true },
@@ -993,9 +1017,15 @@ function buildViolinTraces({ rows, xField, yField, zField, axisRef, zCategoryVal
   return traces;
 }
 
-// Line plot for one cell. Within each Z group, points are sorted by X.
+// Line plot for one cell. Within each Z group, points are sorted by X
+// so the line is monotone left→right (rather than connecting points in
+// trace-array order, which gives a tangled mess).
+//
 // If Y is categorical, lines have no real meaning → fall back to markers only.
-function buildLineTraces({ rows, xField, yField, zField, axisRef, zCategoryValues, showLegend }) {
+//
+// `xCategoryArray` (when xIsCat) gives the visual tick order; we sort by
+// indexOf into that array so the line follows the on-screen tick order.
+function buildLineTraces({ rows, xField, yField, zField, axisRef, zCategoryValues, showLegend, xCategoryArray }) {
   const xKey = xField.name;
   const yKey = yField.name;
   const xref = `x${axisRef}`;
@@ -1006,7 +1036,16 @@ function buildLineTraces({ rows, xField, yField, zField, axisRef, zCategoryValue
   const traces = [];
 
   const sortRows = (arr) => {
-    if (xIsCat) return arr.slice();
+    if (xIsCat) {
+      // Sort by position in the layout's categoryarray so the line
+      // matches the visual tick order. Unknown values go to the end.
+      const cats = xCategoryArray || [];
+      const idx = (v) => {
+        const i = cats.indexOf(String(v));
+        return i < 0 ? Number.POSITIVE_INFINITY : i;
+      };
+      return arr.slice().sort((a, b) => idx(a[xKey]) - idx(b[xKey]));
+    }
     return arr.slice().sort((a, b) => {
       const ax = a[xKey], bx = b[xKey];
       if (!isNum(ax)) return 1;
@@ -1162,11 +1201,12 @@ export function UnifiedChartGrid({
       //   (b) it's a box/violin chart with numeric Y (we bin by X tick)
       const xAsCategory = !!xField.isCategorical
         || ((chartType === 'box' || chartType === 'violin') && !yIsCat);
+      let xCategoryArray = null;
       if (xAsCategory) {
-        const xCats = distinctSortedValues(rows, xField.name).map(String);
+        xCategoryArray = distinctSortedValues(rows, xField.name).map(String);
         xLayout.type = 'category';
         xLayout.categoryorder = 'array';
-        xLayout.categoryarray = xCats;
+        xLayout.categoryarray = xCategoryArray;
       }
 
       layout[xAxisKey] = xLayout;
@@ -1205,6 +1245,11 @@ export function UnifiedChartGrid({
         useGl,
         zCategoryValues,
         showLegend: cellIdx === COLOR_OWNER_CELL,
+        // Unique offsetgroup per cell — keeps box/violinmode='group' from
+        // sharing slot tables across separate subplots (which would shift
+        // boxes/violins off their X tick).
+        cellGroup: `cell${cellIdx}`,
+        xCategoryArray,
       });
       allTraces.push(...cellTraces);
     }
