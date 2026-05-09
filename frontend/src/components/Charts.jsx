@@ -527,3 +527,129 @@ export function FacetedGrid({
     />
   );
 }
+
+/* ------------------------------------------------------------------
+ *  WaferMap
+ *
+ *  Render every device at its physical (x, y) die coordinate as a
+ *  square marker, color-encoded by `valueField`. If `facetField` is
+ *  set, build a 1-row × N-col subplot grid (one panel per facet
+ *  value, sharing the colorbar). 1:1 aspect ratio so dies look square.
+ *
+ *  Multiple devices at the same (x, y) overlap; the last drawn point
+ *  wins visually but hover lists all neighbours via the tooltip.
+ * ------------------------------------------------------------------ */
+export function WaferMap({
+  rows, valueField, valueLabel,
+  facetField, facets,
+  onPointClick,
+}) {
+  const allXs = rows.map((r) => r['x']).filter(Number.isFinite);
+  const allYs = rows.map((r) => r['y']).filter(Number.isFinite);
+  const xMin = allXs.length ? Math.min(...allXs) - 1 : -1;
+  const xMax = allXs.length ? Math.max(...allXs) + 1 : 1;
+  const yMin = allYs.length ? Math.min(...allYs) - 1 : -1;
+  const yMax = allYs.length ? Math.max(...allYs) + 1 : 1;
+
+  const allVals = rows.map((r) => r[valueField]).filter(Number.isFinite);
+  const vMin = allVals.length ? Math.min(...allVals) : 0;
+  const vMax = allVals.length ? Math.max(...allVals) : 1;
+
+  const useFacets = !!facetField && facets && facets.length > 0;
+  const panels = useFacets
+    ? facets.map((fv) => ({ key: String(fv), rows: rows.filter((r) => String(r[facetField]) === String(fv)) }))
+    : [{ key: 'all', rows }];
+
+  const traces = [];
+  const layout = {
+    ...baseLayout,
+    showlegend: false,
+    margin: { l: 56, r: 16, t: 36, b: 44 },
+    annotations: [],
+  };
+
+  if (useFacets) {
+    layout.grid = { rows: 1, columns: panels.length, pattern: 'independent' };
+  }
+
+  panels.forEach((panel, pIdx) => {
+    const axisIdx = pIdx + 1;
+    const xref = `x${axisIdx === 1 ? '' : axisIdx}`;
+    const yref = `y${axisIdx === 1 ? '' : axisIdx}`;
+    const xKeyAxis = `xaxis${axisIdx === 1 ? '' : axisIdx}`;
+    const yKeyAxis = `yaxis${axisIdx === 1 ? '' : axisIdx}`;
+
+    layout[xKeyAxis] = {
+      ...baseLayout.xaxis,
+      title: 'X (die 坐标)',
+      range: [xMin, xMax],
+      dtick: 1,
+      zeroline: false,
+    };
+    layout[yKeyAxis] = {
+      ...baseLayout.yaxis,
+      title: pIdx === 0 ? 'Y (die 坐标)' : undefined,
+      range: [yMin, yMax],
+      dtick: 1,
+      scaleanchor: xref,
+      scaleratio: 1,
+      zeroline: false,
+    };
+
+    if (useFacets) {
+      // panel title centered above each subplot
+      const xDomainCenter = (pIdx + 0.5) / panels.length;
+      layout.annotations.push({
+        x: xDomainCenter, y: 1.02, xref: 'paper', yref: 'paper',
+        text: `${facetField} = ${panel.key}`, showarrow: false,
+        font: { size: 11, color: '#475569' },
+      });
+    }
+
+    const pRows = panel.rows;
+    traces.push({
+      type: 'scattergl',
+      mode: 'markers',
+      x: pRows.map((r) => r.x),
+      y: pRows.map((r) => r.y),
+      xaxis: xref,
+      yaxis: yref,
+      marker: {
+        size: 22,
+        symbol: 'square',
+        color: pRows.map((r) => r[valueField]),
+        colorscale: NUMERIC_COLORSCALE,
+        cmin: vMin,
+        cmax: vMax,
+        showscale: pIdx === panels.length - 1,
+        colorbar: pIdx === panels.length - 1
+          ? { title: { text: valueLabel || valueField, side: 'right' }, thickness: 12, len: 0.7 }
+          : undefined,
+        line: { width: 1, color: 'rgba(15,23,42,0.25)' },
+        opacity: 0.9,
+      },
+      customdata: pRows,
+      hovertemplate:
+        '<b>id %{customdata.id}</b><br>'
+        + 'x=%{x}, y=%{y}<br>'
+        + (valueLabel || valueField) + ': %{marker.color:.4g}'
+        + '<extra></extra>',
+      name: panel.key,
+    });
+  });
+
+  return (
+    <Plot
+      data={traces}
+      layout={layout}
+      config={baseConfig}
+      style={{ width: '100%', height: '100%' }}
+      useResizeHandler
+      onClick={(e) => {
+        if (onPointClick && e.points && e.points[0]) {
+          onPointClick(e.points[0].customdata);
+        }
+      }}
+    />
+  );
+}

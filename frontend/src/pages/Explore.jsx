@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import I from '../components/Icons.jsx';
-import { ScatterPlot, BoxPlot, ViolinPlot, MultiLineChart, FacetedGrid } from '../components/Charts.jsx';
+import { ScatterPlot, BoxPlot, ViolinPlot, MultiLineChart, FacetedGrid, WaferMap } from '../components/Charts.jsx';
 import useFields, { displayLabel } from '../hooks/useFields.js';
 import { queryDevices, exportCsv } from '../api/endpoints.js';
 import DeviceModal from '../components/DeviceModal.jsx';
@@ -45,12 +45,16 @@ const CATEGORICAL_SECTIONS = new Set(['categorical']);
 const DEFAULT_FACET_Y = ['fs_ghz', 'zs_ohm', 'qs_bodeq', 'fp_ghz', 'zp_ohm', 'qp_bodeq', 'bodeq_smooth', 'k2eff_pct'];
 
 const CHART_TYPES = [
-  { key: 'scatter', label: '散点',   icon: 'scatter' },
-  { key: 'box',     label: '箱型',   icon: 'box' },
-  { key: 'violin',  label: '小提琴', icon: 'box' },
-  { key: 'line',    label: '折线',   icon: 'line' },
-  { key: 'facet',   label: '小倍图', icon: 'layers' },
+  { key: 'scatter', label: '散点',     icon: 'scatter' },
+  { key: 'box',     label: '箱型',     icon: 'box' },
+  { key: 'violin',  label: '小提琴',   icon: 'box' },
+  { key: 'line',    label: '折线',     icon: 'line' },
+  { key: 'facet',   label: '小倍图',   icon: 'layers' },
+  { key: 'wafer',   label: 'Wafer 版图', icon: 'wafer' },
 ];
+
+// Default facet-field value meaning "no faceting".
+const NO_FACET = '__none__';
 
 export default function Explore() {
   const { data: fields, loading: fLoading, error: fErr } = useFields();
@@ -59,6 +63,9 @@ export default function Explore() {
   const [yKey, setYKey] = useState('qs');
   const [colorKey, setColorKey] = useState('eg');
   const [facetYKeys, setFacetYKeys] = useState(DEFAULT_FACET_Y);
+  // Wafer-map: which value to color-encode and optional facet field.
+  const [waferValueKey, setWaferValueKey] = useState('k2eff_pct');
+  const [waferFacetKey, setWaferFacetKey] = useState(NO_FACET);
   const [filters, setFilters] = useState({});
   const [limit, setLimit] = useState(20000);
   const [rows, setRows] = useState([]);
@@ -70,16 +77,23 @@ export default function Explore() {
 
   const allFields = fields?.all || [];
 
-  const xField = fields?.byName?.[xKey];
-  const yField = fields?.byName?.[yKey];
+  // For wafer mode, X/Y are locked to the geometric die coordinate fields.
+  const isWafer = chartType === 'wafer';
+  const effectiveXKey = isWafer ? 'x' : xKey;
+  const effectiveYKey = isWafer ? 'y' : yKey;
+
+  const xField = fields?.byName?.[effectiveXKey];
+  const yField = fields?.byName?.[effectiveYKey];
   const colorField = fields?.byName?.[colorKey];
+  const waferValueField = fields?.byName?.[waferValueKey];
   const xIsCategory = xField ? CATEGORICAL_SECTIONS.has(xField.section) : false;
   const yIsCategory = yField ? CATEGORICAL_SECTIONS.has(yField.section) : false;
   const colorIsCategory = colorField ? CATEGORICAL_SECTIONS.has(colorField.section) : false;
 
-  const xLabel = xField ? displayLabel(xField) : xKey;
-  const yLabel = yField ? displayLabel(yField) : yKey;
+  const xLabel = xField ? displayLabel(xField) : effectiveXKey;
+  const yLabel = yField ? displayLabel(yField) : effectiveYKey;
   const colorLabel = colorField ? displayLabel(colorField) : colorKey;
+  const waferValueLabel = waferValueField ? displayLabel(waferValueField) : waferValueKey;
 
   // Validation: Y as categorical is only allowed for box/violin where it
   // doesn't really make sense; surface a warning.
@@ -89,15 +103,21 @@ export default function Explore() {
     setLoading(true);
     setError(null);
     try {
-      // For facet, request all selected Y fields too.
+      // Field set varies per chart type.
       const fieldsNeeded = new Set(['batch_no', 'wafer', 'coord', 'pf', 'id']);
-      [xKey, yKey, colorKey].forEach((k) => k && fieldsNeeded.add(k));
-      if (chartType === 'facet') facetYKeys.forEach((k) => fieldsNeeded.add(k));
+      if (isWafer) {
+        ['x', 'y', 'folder_name'].forEach((k) => fieldsNeeded.add(k));
+        if (waferValueKey) fieldsNeeded.add(waferValueKey);
+        if (waferFacetKey && waferFacetKey !== NO_FACET) fieldsNeeded.add(waferFacetKey);
+      } else {
+        [xKey, yKey, colorKey].forEach((k) => k && fieldsNeeded.add(k));
+        if (chartType === 'facet') facetYKeys.forEach((k) => fieldsNeeded.add(k));
+      }
       const res = await queryDevices({
         filters,
         fields: Array.from(fieldsNeeded),
         limit,
-        order_by: xIsCategory ? 'id' : xKey,
+        order_by: isWafer ? 'id' : (xIsCategory ? 'id' : xKey),
       });
       setRows(res.rows || []);
       setStats({ total: res.total, returned: res.returned, truncated: res.truncated });
@@ -129,11 +149,32 @@ export default function Explore() {
     [facetYKeys, fields],
   );
 
-  const titleText = chartType === 'facet'
-    ? `${xLabel} × ${facetYFields.length} 个 Y 字段`
-    : chartType === 'box' || chartType === 'violin'
-      ? `${yLabel} grouped by ${xLabel}`
-      : `${xLabel} × ${yLabel}`;
+  // Distinct (x, y) cell count for wafer header hint.
+  const waferCellCount = useMemo(() => {
+    if (!isWafer) return 0;
+    const s = new Set();
+    rows.forEach((r) => s.add(`${r.x}|${r.y}`));
+    return s.size;
+  }, [rows, isWafer]);
+
+  // Unique facet values (e.g. distinct wafer numbers) when faceting.
+  const waferFacetValues = useMemo(() => {
+    if (!isWafer || !waferFacetKey || waferFacetKey === NO_FACET) return [];
+    const s = new Set();
+    rows.forEach((r) => {
+      const v = r[waferFacetKey];
+      if (v !== null && v !== undefined) s.add(v);
+    });
+    return Array.from(s).sort((a, b) => (a > b ? 1 : a < b ? -1 : 0));
+  }, [rows, isWafer, waferFacetKey]);
+
+  const titleText = isWafer
+    ? `Wafer 版图 · ${waferValueLabel}`
+    : chartType === 'facet'
+      ? `${xLabel} × ${facetYFields.length} 个 Y 字段`
+      : chartType === 'box' || chartType === 'violin'
+        ? `${yLabel} grouped by ${xLabel}`
+        : `${xLabel} × ${yLabel}`;
 
   return (
     <>
@@ -244,6 +285,25 @@ export default function Explore() {
                       kind="violin"
                     />
                   )}
+                  {chartType === 'wafer' && (
+                    <>
+                      <div className="wafer-hint" style={{
+                        position: 'absolute', top: 6, left: 12,
+                        fontSize: 10.5, color: 'var(--fg-4)',
+                        fontFamily: 'var(--font-mono)',
+                      }}>
+                        {rows.length} 个数据点 · {waferCellCount} 个 (x,y) 坐标 · 重叠位置以最后一个 device 颜色显示
+                      </div>
+                      <WaferMap
+                        rows={rows}
+                        valueField={waferValueKey}
+                        valueLabel={waferValueLabel}
+                        facetField={waferFacetKey !== NO_FACET ? waferFacetKey : null}
+                        facets={waferFacetValues}
+                        onPointClick={(d) => setActiveDevice(d)}
+                      />
+                    </>
+                  )}
                 </div>
               )}
             </div>
@@ -257,6 +317,8 @@ export default function Explore() {
           chartType={chartType}
           facetYKeys={facetYKeys}
           setFacetYKeys={setFacetYKeys}
+          waferValueKey={waferValueKey} setWaferValueKey={setWaferValueKey}
+          waferFacetKey={waferFacetKey} setWaferFacetKey={setWaferFacetKey}
           limit={limit} setLimit={setLimit}
           stats={stats}
           xIsCategory={xIsCategory}
@@ -274,9 +336,12 @@ function Inspector({
   xKey, setXKey, yKey, setYKey, colorKey, setColorKey,
   allFields, chartType,
   facetYKeys, setFacetYKeys,
+  waferValueKey, setWaferValueKey,
+  waferFacetKey, setWaferFacetKey,
   limit, setLimit, stats,
   xIsCategory, colorIsCategory, yWarning,
 }) {
+  const isWafer = chartType === 'wafer';
   return (
     <div className="panel right">
       <div className="panel-head">
@@ -286,14 +351,37 @@ function Inspector({
       <div className="panel-body">
         <div className="section">
           <div className="section-title">轴 / 编码</div>
-          <FieldSelect label="X 轴" hint={xIsCategory ? 'category' : 'numeric'} fields={allFields} value={xKey} onChange={setXKey} />
-          <FieldSelect label="Y 轴" hint="numeric ↑" fields={allFields} value={yKey} onChange={setYKey} />
-          {yWarning && (
-            <div style={{ fontSize: 10.5, color: 'var(--warn)', marginTop: -4, marginBottom: 8 }}>
-              ⚠ {yWarning}
-            </div>
+          {isWafer ? (
+            <>
+              <LockedField label="X 轴" valueText="x (die 坐标)" hint="locked" />
+              <LockedField label="Y 轴" valueText="y (die 坐标)" hint="locked" />
+              <FieldSelect
+                label="颜色编码 (值)"
+                hint="numeric"
+                fields={allFields}
+                value={waferValueKey}
+                onChange={setWaferValueKey}
+                sectionsAllowed={['numeric', 'process']}
+              />
+              <FacetSelect
+                label="分面字段"
+                fields={allFields}
+                value={waferFacetKey}
+                onChange={setWaferFacetKey}
+              />
+            </>
+          ) : (
+            <>
+              <FieldSelect label="X 轴" hint={xIsCategory ? 'category' : 'numeric'} fields={allFields} value={xKey} onChange={setXKey} />
+              <FieldSelect label="Y 轴" hint="numeric ↑" fields={allFields} value={yKey} onChange={setYKey} />
+              {yWarning && (
+                <div style={{ fontSize: 10.5, color: 'var(--warn)', marginTop: -4, marginBottom: 8 }}>
+                  ⚠ {yWarning}
+                </div>
+              )}
+              <FieldSelect label="颜色编码 (Z)" hint={colorIsCategory ? 'category' : 'numeric'} fields={allFields} value={colorKey} onChange={setColorKey} />
+            </>
           )}
-          <FieldSelect label="颜色编码 (Z)" hint={colorIsCategory ? 'category' : 'numeric'} fields={allFields} value={colorKey} onChange={setColorKey} />
         </div>
 
         {chartType === 'facet' && (
@@ -353,16 +441,19 @@ function Inspector({
   );
 }
 
-function FieldSelect({ label, hint, fields, value, onChange }) {
+function FieldSelect({ label, hint, fields, value, onChange, sectionsAllowed }) {
   // Group fields by section for an organized dropdown.
   const grouped = useMemo(() => {
     const out = {};
-    for (const f of fields) {
+    const filtered = sectionsAllowed
+      ? fields.filter((f) => sectionsAllowed.includes(f.section))
+      : fields;
+    for (const f of filtered) {
       const k = f.section || 'other';
       (out[k] ||= []).push(f);
     }
     return out;
-  }, [fields]);
+  }, [fields, sectionsAllowed]);
 
   const order = ['categorical', 'geometric', 'numeric', 'process'];
 
@@ -381,6 +472,49 @@ function FieldSelect({ label, hint, fields, value, onChange }) {
               </option>
             ))}
           </optgroup>
+        ))}
+      </select>
+    </div>
+  );
+}
+
+// Read-only field row used when the axis is locked (wafer-map mode).
+function LockedField({ label, valueText, hint }) {
+  return (
+    <div className="field">
+      <div className="field-label">
+        <span>{label}</span>
+        {hint && <span className="hint">{hint}</span>}
+      </div>
+      <input
+        className="input mono"
+        value={valueText}
+        readOnly
+        disabled
+        style={{ opacity: 0.7, cursor: 'not-allowed' }}
+      />
+    </div>
+  );
+}
+
+// Categorical-only field selector that includes a "no facet" option.
+function FacetSelect({ label, fields, value, onChange }) {
+  const candidates = useMemo(
+    () => fields.filter((f) => f.section === 'categorical'),
+    [fields],
+  );
+  return (
+    <div className="field">
+      <div className="field-label">
+        <span>{label}</span>
+        <span className="hint">optional</span>
+      </div>
+      <select className="select" value={value} onChange={(e) => onChange(e.target.value)}>
+        <option value={NO_FACET}>不分面</option>
+        {candidates.map((f) => (
+          <option key={f.name} value={f.name}>
+            {displayLabel(f)}
+          </option>
         ))}
       </select>
     </div>
