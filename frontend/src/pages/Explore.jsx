@@ -1,9 +1,10 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import I from '../components/Icons.jsx';
-import { ScatterPlot, BoxPlot } from '../components/Charts.jsx';
+import { ScatterPlot, BoxPlot, ViolinPlot, MultiLineChart, FacetedGrid } from '../components/Charts.jsx';
 import useFields, { displayLabel } from '../hooks/useFields.js';
-import { queryDevices, queryAggregate, exportCsv } from '../api/endpoints.js';
+import { queryDevices, exportCsv } from '../api/endpoints.js';
 import DeviceModal from '../components/DeviceModal.jsx';
+import FilterPanel from '../components/FilterPanel.jsx';
 
 // 触发浏览器下载一个 Blob
 function downloadBlob(blob, filename) {
@@ -29,12 +30,35 @@ const EXPORT_FIELDS = [
   'deembedded', 's_param_path',
 ];
 
+// Sections of the field metadata (from /api/query/fields)
+const SECTION_LABELS = {
+  categorical: '分类',
+  geometric: '几何',
+  numeric: '数值',
+  process: '工艺',
+};
+
+// Whether a field section is treated as categorical for axis-mapping logic.
+const CATEGORICAL_SECTIONS = new Set(['categorical']);
+
+// Sensible default Y fields used by Facet mode (matches customer reference shot).
+const DEFAULT_FACET_Y = ['fs_ghz', 'zs_ohm', 'qs_bodeq', 'fp_ghz', 'zp_ohm', 'qp_bodeq', 'bodeq_smooth', 'k2eff_pct'];
+
+const CHART_TYPES = [
+  { key: 'scatter', label: '散点',   icon: 'scatter' },
+  { key: 'box',     label: '箱型',   icon: 'box' },
+  { key: 'violin',  label: '小提琴', icon: 'box' },
+  { key: 'line',    label: '折线',   icon: 'line' },
+  { key: 'facet',   label: '小倍图', icon: 'layers' },
+];
+
 export default function Explore() {
   const { data: fields, loading: fLoading, error: fErr } = useFields();
   const [chartType, setChartType] = useState('scatter');
   const [xKey, setXKey] = useState('fs_ghz');
   const [yKey, setYKey] = useState('qs');
   const [colorKey, setColorKey] = useState('eg');
+  const [facetYKeys, setFacetYKeys] = useState(DEFAULT_FACET_Y);
   const [filters, setFilters] = useState({});
   const [limit, setLimit] = useState(20000);
   const [rows, setRows] = useState([]);
@@ -44,25 +68,36 @@ export default function Explore() {
   const [activeDevice, setActiveDevice] = useState(null);
   const [exporting, setExporting] = useState(false);
 
-  const numericFields = fields?.numeric || [];
   const allFields = fields?.all || [];
 
   const xField = fields?.byName?.[xKey];
   const yField = fields?.byName?.[yKey];
   const colorField = fields?.byName?.[colorKey];
+  const xIsCategory = xField ? CATEGORICAL_SECTIONS.has(xField.section) : false;
+  const yIsCategory = yField ? CATEGORICAL_SECTIONS.has(yField.section) : false;
+  const colorIsCategory = colorField ? CATEGORICAL_SECTIONS.has(colorField.section) : false;
+
+  const xLabel = xField ? displayLabel(xField) : xKey;
+  const yLabel = yField ? displayLabel(yField) : yKey;
+  const colorLabel = colorField ? displayLabel(colorField) : colorKey;
+
+  // Validation: Y as categorical is only allowed for box/violin where it
+  // doesn't really make sense; surface a warning.
+  const yWarning = yIsCategory ? 'Y 轴是类别字段，建议把它放到 X 轴或颜色编码上' : null;
 
   const run = async () => {
     setLoading(true);
     setError(null);
     try {
-      const requestedFields = Array.from(
-        new Set([xKey, yKey, colorKey, 'batch_no', 'wafer', 'coord', 'pf'].filter(Boolean))
-      );
+      // For facet, request all selected Y fields too.
+      const fieldsNeeded = new Set(['batch_no', 'wafer', 'coord', 'pf', 'id']);
+      [xKey, yKey, colorKey].forEach((k) => k && fieldsNeeded.add(k));
+      if (chartType === 'facet') facetYKeys.forEach((k) => fieldsNeeded.add(k));
       const res = await queryDevices({
         filters,
-        fields: requestedFields,
+        fields: Array.from(fieldsNeeded),
         limit,
-        order_by: xKey,
+        order_by: xIsCategory ? 'id' : xKey,
       });
       setRows(res.rows || []);
       setStats({ total: res.total, returned: res.returned, truncated: res.truncated });
@@ -73,18 +108,12 @@ export default function Explore() {
     }
   };
 
-  const xLabel = xField ? displayLabel(xField) : xKey;
-  const yLabel = yField ? displayLabel(yField) : yKey;
-
   const onExportCsv = async () => {
     setExporting(true);
     setError(null);
     try {
       const res = await exportCsv({
-        filters,
-        fields: EXPORT_FIELDS,
-        limit: 200000,
-        order_by: 'id',
+        filters, fields: EXPORT_FIELDS, limit: 200000, order_by: 'id',
       });
       const ts = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
       downloadBlob(res.data, `devices_${ts}.csv`);
@@ -95,6 +124,17 @@ export default function Explore() {
     }
   };
 
+  const facetYFields = useMemo(
+    () => facetYKeys.map((k) => fields?.byName?.[k]).filter(Boolean),
+    [facetYKeys, fields],
+  );
+
+  const titleText = chartType === 'facet'
+    ? `${xLabel} × ${facetYFields.length} 个 Y 字段`
+    : chartType === 'box' || chartType === 'violin'
+      ? `${yLabel} grouped by ${xLabel}`
+      : `${xLabel} × ${yLabel}`;
+
   return (
     <>
       <div className="toolbar">
@@ -103,12 +143,19 @@ export default function Explore() {
         </span>
         <div className="divider" />
         <div className="group">
-          <button className={chartType === 'scatter' ? 'active' : ''} onClick={() => setChartType('scatter')}>
-            <I.scatter size={14} /> 散点
-          </button>
-          <button className={chartType === 'box' ? 'active' : ''} onClick={() => setChartType('box')}>
-            <I.box size={14} /> 箱型
-          </button>
+          {CHART_TYPES.map((c) => {
+            const Icn = I[c.icon] || I.scatter;
+            return (
+              <button
+                key={c.key}
+                className={chartType === c.key ? 'active' : ''}
+                onClick={() => setChartType(c.key)}
+                title={c.label}
+              >
+                <Icn size={14} /> {c.label}
+              </button>
+            );
+          })}
         </div>
         <div className="spacer" />
         <button className="btn" onClick={onExportCsv} disabled={exporting} title="按当前筛选条件导出为 CSV">
@@ -123,13 +170,11 @@ export default function Explore() {
       </div>
 
       <div className="workspace">
-        <FilterPanel filters={filters} setFilters={setFilters} fields={fields} />
+        <FilterPanel value={filters} onApply={setFilters} />
         <div className="canvas-wrap">
           <div className="chart-card">
             <div className="chart-head">
-              <span className="title">
-                {chartType === 'scatter' ? `${xLabel} × ${yLabel}` : `${yLabel} grouped`}
-              </span>
+              <span className="title">{titleText}</span>
               <span className="axes">
                 {stats
                   ? `${stats.returned}/${stats.total} rows${stats.truncated ? ' · truncated' : ''}`
@@ -152,39 +197,71 @@ export default function Explore() {
                   请配置参数后点击「运行查询」
                 </div>
               )}
-              {rows.length > 0 && chartType === 'scatter' && (
-                <div style={{ position: 'absolute', inset: 0 }}>
-                  <ScatterPlot
-                    rows={rows}
-                    xKey={xKey}
-                    yKey={yKey}
-                    colorKey={colorKey}
-                    xLabel={xLabel}
-                    yLabel={yLabel}
-                    onPointClick={(d) => setActiveDevice(d)}
-                  />
-                </div>
-              )}
-              {rows.length > 0 && chartType === 'box' && (
-                <div style={{ position: 'absolute', inset: 0 }}>
-                  <BoxPlot rows={rows} groupKey={colorKey} valueKey={yKey} valueLabel={yLabel} />
+              {rows.length > 0 && (
+                <div style={{ position: 'absolute', inset: 0, overflow: 'auto' }}>
+                  {chartType === 'scatter' && (
+                    <ScatterPlot
+                      rows={rows}
+                      xKey={xKey} yKey={yKey} colorKey={colorKey}
+                      xLabel={xLabel} yLabel={yLabel} colorLabel={colorLabel}
+                      xIsCategory={xIsCategory}
+                      colorIsCategory={colorIsCategory}
+                      onPointClick={(d) => setActiveDevice(d)}
+                    />
+                  )}
+                  {chartType === 'box' && (
+                    <BoxPlot
+                      rows={rows}
+                      xKey={xKey} yKey={yKey} colorKey={colorKey}
+                      xLabel={xLabel} yLabel={yLabel}
+                      colorIsCategory={colorIsCategory}
+                    />
+                  )}
+                  {chartType === 'violin' && (
+                    <ViolinPlot
+                      rows={rows}
+                      xKey={xKey} yKey={yKey} colorKey={colorKey}
+                      xLabel={xLabel} yLabel={yLabel}
+                      colorIsCategory={colorIsCategory}
+                    />
+                  )}
+                  {chartType === 'line' && (
+                    <MultiLineChart
+                      rows={rows}
+                      xKey={xKey} yKey={yKey} colorKey={colorKey}
+                      xLabel={xLabel} yLabel={yLabel}
+                      xIsCategory={xIsCategory}
+                    />
+                  )}
+                  {chartType === 'facet' && (
+                    <FacetedGrid
+                      rows={rows}
+                      xKey={xKey}
+                      yFields={facetYFields}
+                      colorKey={colorIsCategory ? colorKey : undefined}
+                      xLabel={xLabel}
+                      xIsCategory={xIsCategory}
+                      kind="violin"
+                    />
+                  )}
                 </div>
               )}
             </div>
           </div>
         </div>
         <Inspector
-          xKey={xKey}
-          setXKey={setXKey}
-          yKey={yKey}
-          setYKey={setYKey}
-          colorKey={colorKey}
-          setColorKey={setColorKey}
-          numericFields={numericFields}
+          xKey={xKey} setXKey={setXKey}
+          yKey={yKey} setYKey={setYKey}
+          colorKey={colorKey} setColorKey={setColorKey}
           allFields={allFields}
-          limit={limit}
-          setLimit={setLimit}
+          chartType={chartType}
+          facetYKeys={facetYKeys}
+          setFacetYKeys={setFacetYKeys}
+          limit={limit} setLimit={setLimit}
           stats={stats}
+          xIsCategory={xIsCategory}
+          colorIsCategory={colorIsCategory}
+          yWarning={yWarning}
         />
       </div>
 
@@ -193,127 +270,12 @@ export default function Explore() {
   );
 }
 
-function FilterPanel({ filters, setFilters, fields }) {
-  const [batchNo, setBatchNo] = useState('');
-  const [wafer, setWafer] = useState('');
-  const [pf, setPf] = useState('');
-  const [fsMin, setFsMin] = useState('');
-  const [fsMax, setFsMax] = useState('');
-
-  const apply = () => {
-    const f = {};
-    if (batchNo) f.batch_no = batchNo.split(',').map((s) => s.trim()).filter(Boolean);
-    if (wafer) f.wafer = wafer.split(',').map((s) => parseInt(s, 10)).filter((x) => !isNaN(x));
-    if (pf) f.pf = [pf];
-    if (fsMin || fsMax) {
-      f.fs_ghz = {};
-      if (fsMin) f.fs_ghz.gte = parseFloat(fsMin);
-      if (fsMax) f.fs_ghz.lte = parseFloat(fsMax);
-    }
-    setFilters(f);
-  };
-
-  const clear = () => {
-    setBatchNo('');
-    setWafer('');
-    setPf('');
-    setFsMin('');
-    setFsMax('');
-    setFilters({});
-  };
-
-  return (
-    <div className="panel">
-      <div className="panel-head">
-        <I.filter size={12} />
-        <span>FILTERS</span>
-        <button className="btn ghost sm" style={{ marginLeft: 'auto', height: 20 }} onClick={clear}>
-          清空
-        </button>
-      </div>
-      <div className="panel-body">
-        <div className="field">
-          <div className="field-label">
-            <span>批次号</span>
-            <span className="hint">逗号分隔</span>
-          </div>
-          <input
-            className="input"
-            placeholder="T8901P.01, T8902"
-            value={batchNo}
-            onChange={(e) => setBatchNo(e.target.value)}
-          />
-        </div>
-        <div className="field">
-          <div className="field-label">
-            <span>Wafer</span>
-            <span className="hint">逗号分隔</span>
-          </div>
-          <input
-            className="input"
-            placeholder="1, 2"
-            value={wafer}
-            onChange={(e) => setWafer(e.target.value)}
-          />
-        </div>
-        <div className="field">
-          <div className="field-label">
-            <span>Pass / Fail</span>
-          </div>
-          <select className="select" value={pf} onChange={(e) => setPf(e.target.value)}>
-            <option value="">任意</option>
-            <option value="Y">Pass</option>
-            <option value="N">Fail</option>
-          </select>
-        </div>
-        <div className="field">
-          <div className="field-label">
-            <span>fs (GHz)</span>
-          </div>
-          <div className="row-flex">
-            <input
-              className="input mono"
-              placeholder="min"
-              value={fsMin}
-              onChange={(e) => setFsMin(e.target.value)}
-              style={{ flex: 1 }}
-            />
-            <span className="dim">—</span>
-            <input
-              className="input mono"
-              placeholder="max"
-              value={fsMax}
-              onChange={(e) => setFsMax(e.target.value)}
-              style={{ flex: 1 }}
-            />
-          </div>
-        </div>
-        <div className="hr" />
-        <button className="btn primary" style={{ width: '100%', justifyContent: 'center' }} onClick={apply}>
-          应用筛选
-        </button>
-        {Object.keys(filters).length > 0 && (
-          <div className="dim mono" style={{ fontSize: 10.5, marginTop: 8, wordBreak: 'break-all' }}>
-            {JSON.stringify(filters)}
-          </div>
-        )}
-      </div>
-    </div>
-  );
-}
-
 function Inspector({
-  xKey,
-  setXKey,
-  yKey,
-  setYKey,
-  colorKey,
-  setColorKey,
-  numericFields,
-  allFields,
-  limit,
-  setLimit,
-  stats,
+  xKey, setXKey, yKey, setYKey, colorKey, setColorKey,
+  allFields, chartType,
+  facetYKeys, setFacetYKeys,
+  limit, setLimit, stats,
+  xIsCategory, colorIsCategory, yWarning,
 }) {
   return (
     <div className="panel right">
@@ -324,10 +286,23 @@ function Inspector({
       <div className="panel-body">
         <div className="section">
           <div className="section-title">轴 / 编码</div>
-          <FieldSelect label="X 轴" hint="numeric" fields={numericFields} value={xKey} onChange={setXKey} />
-          <FieldSelect label="Y 轴" hint="numeric" fields={numericFields} value={yKey} onChange={setYKey} />
-          <FieldSelect label="颜色编码" hint="any" fields={allFields} value={colorKey} onChange={setColorKey} />
+          <FieldSelect label="X 轴" hint={xIsCategory ? 'category' : 'numeric'} fields={allFields} value={xKey} onChange={setXKey} />
+          <FieldSelect label="Y 轴" hint="numeric ↑" fields={allFields} value={yKey} onChange={setYKey} />
+          {yWarning && (
+            <div style={{ fontSize: 10.5, color: 'var(--warn)', marginTop: -4, marginBottom: 8 }}>
+              ⚠ {yWarning}
+            </div>
+          )}
+          <FieldSelect label="颜色编码 (Z)" hint={colorIsCategory ? 'category' : 'numeric'} fields={allFields} value={colorKey} onChange={setColorKey} />
         </div>
+
+        {chartType === 'facet' && (
+          <div className="section">
+            <div className="section-title">小倍图 Y 字段</div>
+            <FacetYPicker allFields={allFields} value={facetYKeys} onChange={setFacetYKeys} />
+          </div>
+        )}
+
         <div className="section">
           <div className="section-title">查询参数</div>
           <div className="field">
@@ -379,6 +354,18 @@ function Inspector({
 }
 
 function FieldSelect({ label, hint, fields, value, onChange }) {
+  // Group fields by section for an organized dropdown.
+  const grouped = useMemo(() => {
+    const out = {};
+    for (const f of fields) {
+      const k = f.section || 'other';
+      (out[k] ||= []).push(f);
+    }
+    return out;
+  }, [fields]);
+
+  const order = ['categorical', 'geometric', 'numeric', 'process'];
+
   return (
     <div className="field">
       <div className="field-label">
@@ -386,12 +373,49 @@ function FieldSelect({ label, hint, fields, value, onChange }) {
         {hint && <span className="hint">{hint}</span>}
       </div>
       <select className="select" value={value} onChange={(e) => onChange(e.target.value)}>
-        {fields.map((f) => (
-          <option key={f.name} value={f.name}>
-            {displayLabel(f)}
-          </option>
+        {order.filter((s) => grouped[s]).map((section) => (
+          <optgroup key={section} label={SECTION_LABELS[section] || section}>
+            {grouped[section].map((f) => (
+              <option key={f.name} value={f.name}>
+                {displayLabel(f)}
+              </option>
+            ))}
+          </optgroup>
         ))}
       </select>
+    </div>
+  );
+}
+
+function FacetYPicker({ allFields, value, onChange }) {
+  // Show only numeric fields as facet Y candidates.
+  const candidates = allFields.filter((f) => f.section === 'numeric' || f.section === 'process');
+  const selected = new Set(value);
+  const toggle = (name) => {
+    const next = selected.has(name)
+      ? value.filter((v) => v !== name)
+      : [...value, name];
+    onChange(next);
+  };
+  return (
+    <div className="cbg-list scrollable" style={{ maxHeight: 220 }}>
+      {candidates.map((f) => {
+        const checked = selected.has(f.name);
+        return (
+          <label key={f.name} className="cbg-item" title={displayLabel(f)}>
+            <span className={`cb${checked ? ' checked' : ''}`} aria-hidden>
+              {checked && <I.check size={10} stroke="#fff" sw={2.5} />}
+            </span>
+            <input
+              type="checkbox"
+              checked={checked}
+              onChange={() => toggle(f.name)}
+              style={{ position: 'absolute', opacity: 0, pointerEvents: 'none' }}
+            />
+            <span className="cbg-item-label">{displayLabel(f)}</span>
+          </label>
+        );
+      })}
     </div>
   );
 }

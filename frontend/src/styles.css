@@ -72,7 +72,7 @@
   --shadow-pop: 0 12px 32px rgba(15, 23, 42, 0.18);
 
   /* --- Layout --- */
-  --rail-w: 56px;
+  --rail-w: 200px;
   --titlebar-h: 44px;
   --statusbar-h: 26px;
   --toolbar-h: 40px;
@@ -207,31 +207,28 @@ input, select, textarea { font-family: inherit; font-size: inherit; color: inher
 }
 .rail-btn {
   position: relative;
-  height: 44px;
-  display: grid; place-items: center;
+  height: 36px;
+  display: flex; align-items: center; gap: 10px;
+  padding: 0 14px;
   background: transparent;
   border: 0;
   color: #8a96a6;
   cursor: pointer;
+  text-align: left;
+  text-decoration: none;
+  font-size: 12.5px;
 }
 .rail-btn:hover { color: #e6e9ee; background: var(--bg-rail-hover); }
 .rail-btn.active { color: #ffffff; background: var(--bg-rail-hover); }
 .rail-btn.active::before {
-  content: ""; position: absolute; left: 0; top: 8px; bottom: 8px;
+  content: ""; position: absolute; left: 0; top: 6px; bottom: 6px;
   width: 2px; background: var(--primary-trace);
 }
 .rail-btn .label {
-  position: absolute; left: calc(var(--rail-w) + 4px);
-  top: 50%; transform: translateY(-50%);
-  background: #1d2129; color: #fff;
-  padding: 4px 8px; border-radius: 3px;
-  font-size: 11.5px; white-space: nowrap;
-  pointer-events: none; opacity: 0;
-  transition: opacity 0.1s;
-  z-index: 50;
-  border: 1px solid #2a2f38;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
-.rail-btn:hover .label { opacity: 1; }
 
 .rail .sep { height: 1px; background: #2a2f38; margin: 6px 10px; }
 .rail .grow { flex: 1; }
@@ -664,3 +661,70 @@ input, select, textarea { font-family: inherit; font-size: inherit; color: inher
 .col-flex { display: flex; flex-direction: column; gap: 8px; }
 .spacer { flex: 1; }
 .hr { height: 1px; background: var(--border); margin: 8px 0; }
+
+/* Upload page: process_type segmented control */
+.proc-seg {
+  display: flex;
+  border: 1px solid var(--border);
+  border-radius: var(--r-2);
+  background: var(--bg-panel-2);
+  overflow: hidden;
+  height: 30px;
+}
+.proc-seg-btn {
+  flex: 1;
+  background: transparent;
+  border: 0;
+  border-right: 1px solid var(--border);
+  color: var(--fg-2);
+  font-size: 12px;
+  cursor: pointer;
+  padding: 0 8px;
+}
+.proc-seg-btn:last-child { border-right: 0; }
+.proc-seg-btn:hover:not(:disabled) { background: var(--bg-panel); color: var(--fg-1); }
+.proc-seg-btn.active { background: var(--primary-soft); color: var(--primary); font-weight: 500; }
+.proc-seg-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+
+/* BatchDetail: wide table with horizontal scroll */
+.dtable-wide { min-width: 1800px; }
+.dtable-wide th, .dtable-wide td { white-space: nowrap; }
+
+/* ============================================
+   Checkbox group (filter panel multi-select)
+   ============================================ */
+.cbg-actions {
+  display: flex; gap: 4px; margin-bottom: 4px;
+}
+.cbg-actions .btn.sm {
+  height: 18px; padding: 0 6px; font-size: 10.5px;
+}
+.cbg-list {
+  display: flex; flex-direction: column;
+  gap: 1px;
+  padding: 2px;
+  background: var(--bg-panel-2);
+  border: 1px solid var(--border);
+  border-radius: var(--r-2);
+}
+.cbg-list.scrollable {
+  max-height: 160px;
+  overflow-y: auto;
+}
+.cbg-list.loading { opacity: 0.5; pointer-events: none; }
+.cbg-item {
+  position: relative;
+  display: flex; align-items: center; gap: 6px;
+  height: 22px; padding: 0 6px;
+  font-size: 11.5px;
+  color: var(--fg-2);
+  cursor: pointer;
+  border-radius: 2px;
+  user-select: none;
+}
+.cbg-item:hover { background: var(--bg-panel); }
+.cbg-item .cbg-item-label {
+  flex: 1; min-width: 0;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  font-family: var(--font-mono);
+}

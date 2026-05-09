@@ -46,8 +46,10 @@ export const queryAggregate = (body) =>
   api.post('/query/aggregate', body).then((r) => r.data);
 export const getQueryFields = () =>
   api.get('/query/fields').then((r) => r.data);
-export const getQueryDistinct = (field) =>
-  api.get('/query/distinct', { params: { field } }).then((r) => r.data);
+export const getQueryDistinct = (field, limit = 500) =>
+  api.get('/query/distinct', { params: { field, limit } }).then((r) => r.data);
+// Alias commonly used by UI components
+export const distinctValues = (field, limit = 500) => getQueryDistinct(field, limit);
 
 export const getDeviceSparam = (id, param = 's11_db') =>
   api

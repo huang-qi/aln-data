@@ -38,7 +38,14 @@ def celery_eager() -> None:
 
 @pytest.fixture(autouse=True)
 def clean_tables() -> None:
-    """每个测试前清掉所有业务表。"""
+    """每个测试前清掉所有业务表。
+
+    注意：默认会清掉本地开发数据。设 ALN_PROTECT_DB=1 跳过 truncate（保护生产/staging 数据）。
+    CI 应当用独立的临时数据库，无需此变量。
+    """
+    import os
+    if os.environ.get("ALN_PROTECT_DB") == "1":
+        pytest.skip("ALN_PROTECT_DB=1，跳过会清数据的集成测试")
     with engine.begin() as conn:
         conn.execute(
             text(

@@ -3,6 +3,41 @@ import { useParams, Link } from 'react-router-dom';
 import I from '../components/Icons.jsx';
 import { getBatch, listBatchDevices, exportCsv } from '../api/endpoints.js';
 import DeviceModal from '../components/DeviceModal.jsx';
+import useFields, { displayLabel } from '../hooks/useFields.js';
+
+// 表格列定义（按"标识 → 工艺 → 主参数 → BodeQ → 中间峰"分组）
+// type: 'text' | 'num'  (num 用 mono 等宽字体右对齐)
+// digits: 数值精度
+const COLUMN_DEFS = [
+  // 标识
+  { key: 'original_filename', fallback: '原始文件名', type: 'text' },
+  { key: 'mark', fallback: 'Mark', type: 'text' },
+  { key: 'wafer', fallback: 'Wafer', type: 'text', render: (d) => (d.wafer != null ? `W${d.wafer}` : '—') },
+  { key: 'coord', fallback: 'Coord', type: 'text' },
+  { key: 'x', fallback: 'X', type: 'num', digits: 0 },
+  { key: 'y', fallback: 'Y', type: 'num', digits: 0 },
+  { key: 'pf', fallback: 'P/F', type: 'text', render: (d) => <span className={d.pf === 'Y' ? 'pass' : 'fail'}>{d.pf || '—'}</span> },
+  // 工艺
+  { key: 'eg', fallback: 'EG', type: 'num', digits: 2 },
+  { key: 'fl', fallback: 'FL', type: 'num', digits: 2 },
+  { key: 'ag', fallback: 'AG', type: 'num', digits: 2 },
+  { key: 'area_um2', fallback: 'Area (μm²)', type: 'num', digits: 0 },
+  // 主参数
+  { key: 'fs_ghz', fallback: 'fs (GHz)', type: 'num', digits: 4 },
+  { key: 'fp_ghz', fallback: 'fp (GHz)', type: 'num', digits: 4 },
+  { key: 'zs_ohm', fallback: 'Zs (Ω)', type: 'num', digits: 2 },
+  { key: 'zp_ohm', fallback: 'Zp (Ω)', type: 'num', digits: 2 },
+  { key: 'qs', fallback: 'Qs', type: 'num', digits: 0 },
+  { key: 'qp', fallback: 'Qp', type: 'num', digits: 0 },
+  // BodeQ
+  { key: 'fbode_ghz', fallback: 'fBode (GHz)', type: 'num', digits: 4 },
+  { key: 'qs_bodeq', fallback: 'Qs (BodeQ)', type: 'num', digits: 0 },
+  { key: 'qp_bodeq', fallback: 'Qp (BodeQ)', type: 'num', digits: 0 },
+  { key: 'k2eff_pct', fallback: 'k²eff (%)', type: 'num', digits: 2 },
+  // 中间峰
+  { key: 'fp2_ghz', fallback: 'fp2 (GHz)', type: 'num', digits: 4 },
+  { key: 'fs2_ghz', fallback: 'fs2 (GHz)', type: 'num', digits: 4 },
+];
 
 // 触发浏览器下载一个 Blob
 function downloadBlob(blob, filename) {
@@ -39,6 +74,23 @@ export default function BatchDetail() {
   const [error, setError] = useState(null);
   const [activeDevice, setActiveDevice] = useState(null);
   const [exporting, setExporting] = useState(false);
+  const fieldsState = useFields();
+
+  // 计算列头：优先用 useFields 的 label+unit，缺失时回退到 fallback
+  const columns = COLUMN_DEFS.map((c) => {
+    const f = fieldsState.data?.byName?.[c.key];
+    return { ...c, header: f ? displayLabel(f) : c.fallback };
+  });
+
+  const fmtCell = (d, c) => {
+    if (c.render) return c.render(d);
+    const v = d[c.key];
+    if (v == null || v === '') return '—';
+    if (c.type === 'num' && typeof v === 'number') {
+      return Number.isFinite(v) ? v.toFixed(c.digits ?? 2) : '—';
+    }
+    return v;
+  };
 
   useEffect(() => {
     getBatch(batchNo)
@@ -166,24 +218,20 @@ export default function BatchDetail() {
             </div>
           </div>
           <div style={{ overflow: 'auto', maxHeight: '60vh' }}>
-            <table className="dtable">
+            <table className="dtable dtable-wide">
               <thead>
                 <tr>
                   <th>ID</th>
-                  <th>Wafer</th>
-                  <th>Coord</th>
-                  <th>Mark</th>
-                  <th className="num">fs (GHz)</th>
-                  <th className="num">Qs</th>
-                  <th className="num">k²eff (%)</th>
-                  <th>P/F</th>
+                  {columns.map((c) => (
+                    <th key={c.key} className={c.type === 'num' ? 'num' : ''}>{c.header}</th>
+                  ))}
                   <th></th>
                 </tr>
               </thead>
               <tbody>
                 {items.length === 0 && (
                   <tr>
-                    <td colSpan="9" className="dim" style={{ textAlign: 'center', padding: 24 }}>
+                    <td colSpan={columns.length + 2} className="dim" style={{ textAlign: 'center', padding: 24 }}>
                       暂无器件
                     </td>
                   </tr>
@@ -191,13 +239,9 @@ export default function BatchDetail() {
                 {items.map((d) => (
                   <tr key={d.id || `${d.wafer}-${d.coord}`} style={{ cursor: 'pointer' }} onClick={() => setActiveDevice(d)}>
                     <td className="mono">{d.id || '—'}</td>
-                    <td>W{d.wafer}</td>
-                    <td className="mono">{d.coord}</td>
-                    <td>{d.mark}</td>
-                    <td className="num">{d.fs_ghz?.toFixed(4) || '—'}</td>
-                    <td className="num">{d.qs?.toFixed(0) || '—'}</td>
-                    <td className="num">{d.k2eff_pct?.toFixed(2) || '—'}</td>
-                    <td className={d.pf === 'Y' ? 'pass' : 'fail'}>{d.pf}</td>
+                    {columns.map((c) => (
+                      <td key={c.key} className={c.type === 'num' ? 'num mono' : ''}>{fmtCell(d, c)}</td>
+                    ))}
                     <td>
                       <button className="btn ghost sm" onClick={(e) => { e.stopPropagation(); setActiveDevice(d); }}>
                         <I.curve size={12} />

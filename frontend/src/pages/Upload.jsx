@@ -11,7 +11,6 @@ export default function Upload() {
   const [fStart, setFStart] = useState('');
   const [fEnd, setFEnd] = useState('');
   const [processType, setProcessType] = useState('BOTH');
-  const [deembed, setDeembed] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [taskInfo, setTaskInfo] = useState(null);
   const [submitError, setSubmitError] = useState(null);
@@ -64,7 +63,10 @@ export default function Upload() {
     if (fStart) fd.append('f_start_ghz', fStart);
     if (fEnd) fd.append('f_end_ghz', fEnd);
     fd.append('process_type', processType);
-    fd.append('deembed', deembed ? 'true' : 'false');
+    // deembed: v1 默认关闭，不暴露给用户（后端 default=False）
+    // 调试：确认提交的 process_type
+    // eslint-disable-next-line no-console
+    console.log('[upload] process_type =', processType);
 
     setSubmitting(true);
     setUploadPct(0);
@@ -239,39 +241,19 @@ export default function Upload() {
               <div className="field-label">
                 <span>处理类型</span>
               </div>
-              <div className="group" style={{ width: '100%' }}>
+              <div className="proc-seg" style={{ width: '100%' }}>
                 {['S2P', 'S1P', 'BOTH'].map((t) => (
                   <button
                     key={t}
-                    style={{ flex: 1 }}
-                    className={processType === t ? 'active' : ''}
+                    type="button"
+                    className={`proc-seg-btn${processType === t ? ' active' : ''}`}
                     onClick={() => setProcessType(t)}
-                    disabled={submitting || taskInfo}
+                    disabled={submitting || !!taskInfo}
                   >
                     {t}
                   </button>
                 ))}
               </div>
-            </div>
-            <div
-              className="row-flex"
-              style={{
-                justifyContent: 'space-between',
-                padding: '8px 0',
-                borderTop: '1px solid var(--border-soft)',
-                marginTop: 8,
-              }}
-            >
-              <div>
-                <div style={{ fontSize: 12 }}>De-embedding (ShortOpen)</div>
-                <div className="dim" style={{ fontSize: 10.5, marginTop: 2 }}>
-                  v1 默认关闭
-                </div>
-              </div>
-              <span
-                className={`switch${deembed ? ' on' : ''}`}
-                onClick={() => !submitting && !taskInfo && setDeembed(!deembed)}
-              />
             </div>
           </div>
         </div>
