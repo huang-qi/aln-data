@@ -37,3 +37,9 @@ backend/uploads/
 # OS
 .DS_Store
 Thumbs.db
+
+# Playwright/MCP 临时产物
+.playwright-cli/
+.playwright-mcp/
+**/.playwright-cli/
+**/.playwright-mcp/
