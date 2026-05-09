@@ -18,7 +18,7 @@ services:
     volumes:
       - /data3/aln/pgdata:/var/lib/postgresql/data
     ports:
-      - "127.0.0.1:5432:5432"  # 仅本机访问
+      - "127.0.0.1:15432:5432"  # host 5432/5433 都被占，改 15432
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-aln}"]
       interval: 10s
