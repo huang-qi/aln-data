@@ -19,8 +19,8 @@
 ```
 ┌─────────────────────────────────────────────────────────────────┐
 │                      浏览器（所内多用户）                         │
-│                     Vue 3 + Element Plus                         │
-│             AG Grid（表格） + Plotly.js（可视化）                 │
+│                React 18 + Vite + React Router 6                 │
+│         HTML 表格（虚拟滚动按需加） + Plotly.js（可视化）         │
 └────────────────────┬────────────────────────────────────────────┘
                      │ HTTP / SSE
 ┌────────────────────▼────────────────────────────────────────────┐
@@ -80,14 +80,14 @@
 
 | 组件 | 选型 | 理由 |
 |---|---|---|
-| 框架 | **Vue 3** + Composition API | 国内文档/生态友好 |
-| 构建 | Vite 5 | Vue 3 标配 |
-| 状态 | Pinia | Vue 3 标配 |
-| UI 组件 | **Element Plus** | 上传/抽屉/对话框/通知/表单全套 |
-| 路由 | Vue Router 4 | 标配 |
+| 框架 | **React 18** + Hooks | 外部高保真原型已采用，复用避免重写 |
+| 构建 | Vite 5 | 标配，`@vitejs/plugin-react` |
+| 状态 | useState / useContext | 原型未引入 Redux/Zustand，简单状态够用 |
+| UI 组件 | 自写组件 + `styles.css` | 原型已自带成体系组件，不再叠加大组件库 |
+| 路由 | React Router 6 | React 生态主流 |
 | HTTP | axios | 主流 |
-| 表格 | **AG Grid 社区版** | 几十万行虚拟滚动 |
-| 可视化 | **Plotly.js** | 散点/箱型/折线/版图分布全覆盖，原生交互 + HTML 导出 |
+| 表格 | HTML `<table>` + 虚拟滚动按需加 | 原型用原生表格；几十万行场景再引 react-window |
+| 可视化 | **Plotly.js**（`react-plotly.js` 包装） | 散点/箱型/折线/版图分布全覆盖，原生交互 + HTML 导出 |
 
 ### 3.4 部署
 
@@ -113,7 +113,7 @@
 | 8 | 历史 18 批次**用户逐个上传** | 不做批量导入工具 |
 | 9 | 文件存储**本地 `/data3/aln/files/`** | 按 batch/wafer/port 分目录 |
 | 10 | 后端 **FastAPI + Celery + Redis** | 异步处理上传 |
-| 11 | 前端 **Vue 3 + Element Plus + Plotly + AG Grid** | |
+| 11 | 前端 **React 18 + Vite + Plotly.js**，无大组件库 | 见 §13 决策记录（2026-05-09 由 Vue 3 切换） |
 | 12 | 作图先**下拉选字段**，不做拖拽 | |
 | 13 | 大数据量**先全画**，性能不够再降采样 | |
 | 14 | 登录**裸开** | 内网隔离 |
@@ -159,11 +159,11 @@ aln-data/
 ├── frontend/
 │   ├── src/
 │   │   ├── api/              # axios 客户端
-│   │   ├── components/
-│   │   ├── pages/
-│   │   ├── router/
-│   │   ├── stores/           # Pinia
-│   │   └── main.ts
+│   │   ├── components/       # *.jsx 组件
+│   │   ├── pages/            # 路由级页面 *.jsx
+│   │   ├── router/           # React Router 6 配置
+│   │   ├── hooks/            # 自定义 hooks（替代 Pinia store）
+│   │   └── main.jsx          # ReactDOM.createRoot 入口
 │   ├── Dockerfile
 │   ├── nginx.conf            # 前端容器内 Nginx 配置
 │   └── package.json
@@ -329,3 +329,4 @@ aln-data/
 - ✅ 黄金参考 baseline：暂不要求客户提供，靠单元测试 + 物理合理性验证
 - ✅ R0 公式 bug：因 mBVD 删除而作废
 - ✅ `Area` / `Area(um2)` 含义：当作 type/数值字段直接入库，不做语义解析
+- ✅ **前端选型**：从 Vue 3 + Element Plus + Pinia + AG Grid 切换到 **React 18 + Vite**。原因：外部工具产出的高保真原型采用 React + Babel CDN 形式（~2500 行 JSX），顺势采纳可避免重写。后续以 Vite + React 真工程化（`@vitejs/plugin-react`），状态用 `useState/useContext`，表格用原生 `<table>`、需要时再加 `react-window`，可视化用 `react-plotly.js`。详见 `docs/frontend-evaluation.md`。

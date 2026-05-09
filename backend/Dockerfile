@@ -1,12 +1,6 @@
 # 谐振器数据平台 - 后端镜像（FastAPI + Celery 共用）
+# 全部依赖走预编译 wheel：psycopg[binary] / numpy / scipy / scikit-rf，无需 build-essential / libpq-dev。
 FROM python:3.12-slim
-
-# 系统依赖（scipy / scikit-rf 需要 BLAS；psycopg 需要 libpq）
-RUN apt-get update && apt-get install -y --no-install-recommends \
-        build-essential \
-        libpq-dev \
-        curl \
-    && rm -rf /var/lib/apt/lists/*
 
 # uv 包管理器
 COPY --from=ghcr.io/astral-sh/uv:0.10 /uv /usr/local/bin/uv
