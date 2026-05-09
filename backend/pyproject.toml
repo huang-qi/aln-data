@@ -47,3 +47,6 @@ select = ["E", "F", "W", "I", "N", "B", "UP"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 asyncio_mode = "auto"
+markers = [
+    "integration: real-broker / real-server end-to-end tests; require external worker+uvicorn (default skipped)",
+]
