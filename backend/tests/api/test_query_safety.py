@@ -62,6 +62,33 @@ def test_filter_empty_group_accepted(client: TestClient) -> None:
     assert r.status_code == 200, r.text
 
 
+def test_query_devices_works_with_only_batch_no_field(client: TestClient) -> None:
+    """fields 只选 batch_no（Batch 表字段）也不能 500。
+
+    历史 bug：`select(Batch.batch_no).join(Batch, ...)` SQLAlchemy 没法从
+    select_cols 推断左侧表（没 Device 列），抛 InvalidRequestError 500。
+    必须显式 .select_from(Device)。
+    """
+    r = client.post(
+        "/api/query/devices",
+        json={"filters": {}, "fields": ["batch_no"], "limit": 5},
+    )
+    assert r.status_code == 200, r.text
+
+
+def test_query_aggregate_works_with_only_batch_no_group_by(client: TestClient) -> None:
+    """group_by 只含 batch_no 同样不能 500。"""
+    r = client.post(
+        "/api/query/aggregate",
+        json={
+            "filters": {},
+            "group_by": ["batch_no"],
+            "metrics": [{"field": "qs", "agg": ["avg"]}],
+        },
+    )
+    assert r.status_code == 200, r.text
+
+
 def test_mapping_name_rejects_path_chars(client: TestClient) -> None:
     """对照表 name 直接拼进磁盘文件路径，必须挡掉路径字符。
 

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import csv
 import io
-from datetime import datetime
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -42,7 +42,9 @@ def _select_rows(req: QueryRequest, db: Session) -> tuple[list[str], list[dict[s
 
     where = _build_filters(req.filters)
     select_cols: list[ColumnElement[Any]] = [_resolve_column(f).label(f) for f in fields]
-    stmt = select(*select_cols).join(Batch, Device.batch_id == Batch.id)
+    # 必须显式 select_from(Device)：当用户只选 Batch 表的字段（如 batch_no）时，
+    # SQLAlchemy 无法从 select_cols 推断左侧表，会抛 InvalidRequestError。
+    stmt = select(*select_cols).select_from(Device).join(Batch, Device.batch_id == Batch.id)
     if where:
         stmt = stmt.where(*where)
     if req.order_by is not None:
@@ -76,11 +78,11 @@ def export_csv(req: QueryRequest, db: DbSession) -> StreamingResponse:
             buf.seek(0)
             buf.truncate()
 
-    filename = f"devices_{datetime.utcnow().strftime('%Y%m%d_%H%M%S')}.csv"
+    filename = f"devices_{datetime.now(UTC).strftime('%Y%m%d_%H%M%S')}.csv"
     return StreamingResponse(
         gen(),
         media_type="text/csv; charset=utf-8",
-        headers={"Content-Disposition": f"attachment; filename={filename}"},
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
     )
 
 
@@ -102,7 +104,7 @@ def export_xlsx(req: QueryRequest, db: DbSession) -> dict[str, Any]:
     for r in rows:
         ws.append([r.get(k) for k in fields])
 
-    export_id = datetime.utcnow().strftime("%Y%m%d_%H%M%S_%f")
+    export_id = datetime.now(UTC).strftime("%Y%m%d_%H%M%S_%f")
     filename = f"devices_{export_id}.xlsx"
     out_path = settings.exports_dir / filename
     wb.save(str(out_path))

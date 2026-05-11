@@ -217,7 +217,9 @@ def query_devices(req: QueryRequest, db: DbSession) -> QueryResponse:
     total = db.scalar(count_stmt) or 0
 
     select_cols: list[ColumnElement[Any]] = [_resolve_column(f).label(f) for f in fields]
-    stmt = select(*select_cols).join(Batch, Device.batch_id == Batch.id)
+    # 必须显式 select_from(Device)，否则用户只选 Batch 字段（如 batch_no）时
+    # SQLAlchemy 无法从 select_cols 推断左侧表 → InvalidRequestError 500。
+    stmt = select(*select_cols).select_from(Device).join(Batch, Device.batch_id == Batch.id)
     if where:
         stmt = stmt.where(*where)
 
@@ -264,7 +266,9 @@ def aggregate(req: AggregateRequest, db: DbSession) -> AggregateResponse:
             metric_keys.append((m.field, op))
 
     select_cols = [*group_cols, *metric_cols]
-    stmt = select(*select_cols).join(Batch, Device.batch_id == Batch.id)
+    # 显式 select_from(Device) 同 query_devices —— group_by 只含 batch_no（Batch 表字段）
+    # 时同样会让 SQLAlchemy 无法推断左侧表。
+    stmt = select(*select_cols).select_from(Device).join(Batch, Device.batch_id == Batch.id)
     if where:
         stmt = stmt.where(*where)
     if group_cols:
