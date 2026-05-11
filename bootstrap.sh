@@ -66,6 +66,24 @@ load_data_root() {
     DATA_ROOT="${DATA_ROOT_DEFAULT}"
 }
 
+# 探测本机对外（局域网）可达 IP。优先默认路由的 src；回落到非 loopback/bridge/link-local 的 IPv4。
+# 用于在 up/url 时打印一个"固定的同事可访问 URL"，避免别人查 ifconfig。
+detect_lan_ip() {
+    local ip
+    ip="$(ip -4 -o route show default 2>/dev/null \
+        | awk '{for(i=1;i<=NF;i++) if($i=="src") {print $(i+1); exit}}')"
+    if [[ -n "${ip}" ]]; then
+        echo "${ip}"
+        return
+    fi
+    ip="$(ip -4 -o addr show 2>/dev/null \
+        | awk '$2!="lo" && $2!~/^(docker|podman|cni-|veth|br-)/ {print $4}' \
+        | cut -d/ -f1 \
+        | grep -vE '^(127\.|169\.254\.)' \
+        | head -n1)"
+    [[ -n "${ip}" ]] && echo "${ip}"
+}
+
 compose() {
     podman compose -f "${COMPOSE_FILE}" --env-file "${ENV_FILE}" "$@"
 }
@@ -166,11 +184,17 @@ verify_health() {
 }
 
 print_access_info() {
-    local port
+    local port lan_ip
     port="$(get_nginx_port)"
+    lan_ip="$(detect_lan_ip)"
     echo
     log_ok "全部启动完毕"
-    echo "      Web 入口： http://localhost:${port}"
+    echo "      本机访问： http://localhost:${port}"
+    if [[ -n "${lan_ip}" ]]; then
+        echo "      局域网入口：http://${lan_ip}:${port}    ← 同事打开这个"
+    else
+        echo "      局域网入口：未探测到对外网卡 IP；可用 'ip -4 addr' 自己查"
+    fi
     echo "      API 直连： http://localhost:8001"
     echo "      健康检查： http://localhost:${port}/api/health"
     echo
@@ -260,24 +284,115 @@ cmd_status() {
 
     log_info "磁盘 (${DATA_ROOT})："
     df -h "${DATA_ROOT}" 2>/dev/null || log_error "${DATA_ROOT} 不存在"
+    echo
+
+    local port lan_ip
+    port="$(get_nginx_port)"
+    lan_ip="$(detect_lan_ip)"
+    log_info "访问入口："
+    echo "      本机访问： http://localhost:${port}"
+    if [[ -n "${lan_ip}" ]]; then
+        echo "      局域网入口：http://${lan_ip}:${port}"
+    fi
+}
+
+# ---------- install-service（systemd --user 开机自启） ----------
+SERVICE_NAME="aln-data.service"
+SERVICE_FILE="${HOME}/.config/systemd/user/${SERVICE_NAME}"
+
+cmd_install_service() {
+    check_env_file
+    command -v systemctl >/dev/null 2>&1 || die "未找到 systemctl"
+    systemctl --user status >/dev/null 2>&1 \
+        || die "systemd --user 不可用（需在已登录 user session 中运行）"
+
+    mkdir -p "$(dirname "${SERVICE_FILE}")"
+    log_info "写入 ${SERVICE_FILE}"
+    # 注意：HEREDOC 不引用，可让 ${SCRIPT_DIR} 在此处展开为本机绝对路径，
+    # 不同机器 clone 到不同位置时各装各的，避免硬编码。
+    cat > "${SERVICE_FILE}" <<EOF
+[Unit]
+Description=ALN Data Platform (5-container podman stack)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+WorkingDirectory=${SCRIPT_DIR}
+Environment=NO_COLOR=1
+ExecStart=/bin/bash ${SCRIPT_DIR}/bootstrap.sh up
+ExecStop=/bin/bash ${SCRIPT_DIR}/bootstrap.sh down
+TimeoutStartSec=300
+TimeoutStopSec=120
+
+[Install]
+WantedBy=default.target
+EOF
+
+    log_info "systemctl --user daemon-reload"
+    systemctl --user daemon-reload
+
+    log_info "启用并立即启动 ${SERVICE_NAME}"
+    systemctl --user enable --now "${SERVICE_NAME}"
+
+    log_ok "已安装 + 启用 ${SERVICE_NAME}"
+    if ! loginctl show-user "$(id -un)" 2>/dev/null | grep -q '^Linger=yes'; then
+        echo
+        log_info "为保证机器重启 / 用户登出后服务仍运行，请执行（需 sudo）："
+        echo "      sudo loginctl enable-linger $(id -un)"
+        echo
+    fi
+}
+
+cmd_uninstall_service() {
+    if [[ ! -f "${SERVICE_FILE}" ]]; then
+        log_info "${SERVICE_FILE} 不存在，无需卸载"
+        return
+    fi
+    log_info "停用 + 删除 ${SERVICE_NAME}"
+    systemctl --user disable --now "${SERVICE_NAME}" 2>/dev/null || true
+    rm -f "${SERVICE_FILE}"
+    systemctl --user daemon-reload
+    log_ok "已卸载 ${SERVICE_NAME}（不影响 .env / 容器 / 数据）"
+}
+
+# ---------- url（仅打印，不启服务） ----------
+cmd_url() {
+    check_env_file
+    local port lan_ip
+    port="$(get_nginx_port)"
+    lan_ip="$(detect_lan_ip)"
+    echo "本机访问：  http://localhost:${port}"
+    if [[ -n "${lan_ip}" ]]; then
+        echo "局域网入口：http://${lan_ip}:${port}    ← 告诉同事这个"
+    else
+        log_error "未探测到对外网卡 IP（无默认路由 / 仅有 link-local），用 'ip -4 addr' 自己查"
+    fi
 }
 
 # ---------- 入口 ----------
 main() {
     local cmd="${1:-up}"
     case "${cmd}" in
-        up)     cmd_up     ;;
-        down)   cmd_down   ;;
-        reset)  cmd_reset  ;;
-        status) cmd_status ;;
+        up|start)          cmd_up                ;;
+        down|stop)         cmd_down              ;;
+        reset)             cmd_reset             ;;
+        status)            cmd_status            ;;
+        url)               cmd_url               ;;
+        install-service)   cmd_install_service   ;;
+        uninstall-service) cmd_uninstall_service ;;
         -h|--help|help)
             cat <<EOF
-用法：./bootstrap.sh [up|down|reset|status]
+用法：./bootstrap.sh [up|down|reset|status|url|install-service|uninstall-service]
 
-  up      启动全部 5 容器（默认）
-  down    停止全部容器（保留数据）
-  reset   销毁容器 + 删除 \$DATA_ROOT 业务数据（路径由 .env 中的 DATA_ROOT 决定，默认 ${DATA_ROOT_DEFAULT}），需二次确认
-  status  查看容器状态 + /api/health + 磁盘
+  up | start          启动全部 5 容器（默认）
+  down | stop         停止全部容器（保留数据）
+  reset               销毁容器 + 删除 \$DATA_ROOT 业务数据（路径由 .env 中的 DATA_ROOT 决定，默认 ${DATA_ROOT_DEFAULT}），需二次确认
+  status              查看容器状态 + /api/health + 磁盘 + 访问入口
+  url                 仅打印固定访问入口（本机 + 局域网 URL），不影响服务
+  install-service     安装 systemd --user 服务，开机自启全栈（之后用 systemctl --user 管理）
+  uninstall-service   卸载 systemd 服务（不影响容器和数据）
 
 环境变量：
   NO_COLOR=1   关闭彩色输出
