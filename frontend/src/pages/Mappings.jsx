@@ -31,9 +31,12 @@ export default function Mappings() {
 
   useEffect(() => {
     if (!selected) return;
+    // 快速点不同对照表时旧 fetch 可能后到、覆盖新选中的 entries。
+    let cancelled = false;
     listMappingEntries(selected, { page: 1, size: 200 })
-      .then(setEntries)
-      .catch((e) => setError(e.message));
+      .then((d) => { if (!cancelled) setEntries(d); })
+      .catch((e) => { if (!cancelled) setError(e.message); });
+    return () => { cancelled = true; };
   }, [selected]);
 
   const submit = async () => {

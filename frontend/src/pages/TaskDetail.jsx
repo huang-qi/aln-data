@@ -11,9 +11,11 @@ export default function TaskDetail() {
   const sse = useSSE(taskId);
 
   useEffect(() => {
+    let cancelled = false;
     getTask(taskId)
-      .then(setTask)
-      .catch((e) => setError(e.message));
+      .then((d) => { if (!cancelled) setTask(d); })
+      .catch((e) => { if (!cancelled) setError(e.message); });
+    return () => { cancelled = true; };
   }, [taskId, sse.done]);
 
   const status = sse.status !== 'pending' ? sse.status : task?.status;

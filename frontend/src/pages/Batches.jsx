@@ -11,15 +11,22 @@ export default function Batches() {
   const [error, setError] = useState(null);
   const [search, setSearch] = useState('');
 
-  const load = () => {
+  // load 接受外部 cancelled flag —— useEffect 重跑时能让旧请求丢弃结果，
+  // 避免分页/size 快速切换时慢请求覆盖快请求结果。
+  const load = (cancelled = { current: false }) => {
     setLoading(true);
     listBatches({ page, size, sort: '-uploaded_at' })
-      .then((d) => setData(d))
-      .catch((e) => setError(e.message))
-      .finally(() => setLoading(false));
+      .then((d) => { if (!cancelled.current) setData(d); })
+      .catch((e) => { if (!cancelled.current) setError(e.message); })
+      .finally(() => { if (!cancelled.current) setLoading(false); });
   };
 
-  useEffect(load, [page, size]);
+  useEffect(() => {
+    const cancelled = { current: false };
+    load(cancelled);
+    return () => { cancelled.current = true; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [page, size]);
 
   const onDelete = async (batchNo) => {
     if (!confirm(`确认删除批次 ${batchNo}？此操作不可逆。`)) return;

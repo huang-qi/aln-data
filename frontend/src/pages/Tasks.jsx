@@ -20,13 +20,22 @@ export default function Tasks() {
   const [error, setError] = useState(null);
 
   useEffect(() => {
+    // cancelled 让组件卸载后或 effect 重跑时丢弃 in-flight 响应，
+    // 避免 setState on unmounted（React 18 不警告但仍是浪费）。
+    let cancelled = false;
     const tick = () =>
       listTasks()
-        .then((d) => setTasks(Array.isArray(d) ? d : d?.items || []))
-        .catch((e) => setError(e.message));
+        .then((d) => {
+          if (cancelled) return;
+          setTasks(Array.isArray(d) ? d : d?.items || []);
+        })
+        .catch((e) => { if (!cancelled) setError(e.message); });
     tick();
     const id = setInterval(tick, 5000);
-    return () => clearInterval(id);
+    return () => {
+      cancelled = true;
+      clearInterval(id);
+    };
   }, []);
 
   return (
