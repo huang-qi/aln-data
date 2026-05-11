@@ -46,12 +46,13 @@ class ParsedFilename:
 
 def parse_filename(name: str) -> ParsedFilename:
     """解析文件名，返回结构化字段。"""
+    x, y = extract_xy(name)
     return ParsedFilename(
         name=name,
         mark=extract_mark(name),
         coord=extract_coord(name),
-        x=extract_xy(name)[0],
-        y=extract_xy(name)[1],
+        x=x,
+        y=y,
         port=extract_port(name),
         pf=extract_pf(name),
         is_open=bool(_OPEN_RE.search(name)),

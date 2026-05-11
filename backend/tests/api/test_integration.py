@@ -199,3 +199,49 @@ def test_query_field_whitelist(client: TestClient) -> None:
         json={"filters": {}, "fields": ["DROP TABLE devices"]},
     )
     assert r.status_code == 400
+
+
+def test_upload_marks_task_failed_when_broker_unreachable(
+    client: TestClient, sample_mapping: Path, sample_zip: Path, monkeypatch
+) -> None:
+    """broker（Redis/kombu）不可达时 upload_tasks 必须立刻标 failed 而不是停在 pending。
+
+    历史 bug：upload.py 只 catch ImportError，broker 抛 ConnectionError 时直接
+    冒泡 500，但 batch+task 已 commit、zip 已写盘 → upload_task 永远 pending。
+    """
+    # 先建一个 mapping
+    with sample_mapping.open("rb") as f:
+        r = client.post(
+            "/api/mappings",
+            files={"file": ("broker_test.xlsx", f)},
+            data={"name": "broker_test"},
+        )
+    assert r.status_code == 201
+    mapping_id = r.json()["id"]
+
+    # monkeypatch .delay() 抛 ConnectionError 模拟 broker 不可达
+    from app.workers import process_batch as pb_mod
+
+    def _explode(**kwargs):
+        raise ConnectionError("redis is down")
+
+    monkeypatch.setattr(pb_mod.process_batch_task, "delay", _explode)
+
+    with sample_zip.open("rb") as f:
+        r = client.post(
+            "/api/uploads",
+            files={"file": ("broker_fail.zip", f)},
+            data={"mapping_id": str(mapping_id), "process_type": "S1P"},
+        )
+    # 应该返回 503 而不是 500
+    assert r.status_code == 503, r.text
+
+    # 看一眼 upload_tasks：必须是 failed
+    r = client.get("/api/tasks", params={"limit": 50})
+    assert r.status_code == 200
+    tasks = r.json()
+    matching = [t for t in tasks if t["batch_no"] == "broker_fail"]
+    assert matching, "找不到对应 upload_task"
+    assert matching[0]["status"] == "failed", (
+        f"broker 失败后 task 应为 failed，实际 {matching[0]['status']}"
+    )

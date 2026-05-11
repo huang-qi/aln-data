@@ -73,30 +73,43 @@ def create_upload(
                 )
             out.write(chunk)
 
-    task = UploadTask(
-        batch_no=batch_no,
-        status="pending",
-        progress_pct=0,
-        progress_msg="排队中",
-    )
-    db.add(task)
-    db.flush()
+    # zip 已经在盘上了；下面任何 DB 失败都得把 zip 删掉，避免
+     # 并发上传同名文件触发 batch_no unique 冲突时孤儿 zip 占盘。
+    try:
+        task = UploadTask(
+            batch_no=batch_no,
+            status="pending",
+            progress_pct=0,
+            progress_msg="排队中",
+        )
+        db.add(task)
+        db.flush()
 
-    batch = Batch(
-        batch_no=batch_no,
-        mapping_id=mapping_id,
-        f_start_ghz=f_start_ghz,
-        f_end_ghz=f_end_ghz,
-        deembedded=bool(deembed),
-        process_type=process_type,
-        file_path=str(saved_path),
-        device_count=0,
-        task_id=task.id,
-    )
-    db.add(batch)
-    db.commit()
-    db.refresh(task)
+        batch = Batch(
+            batch_no=batch_no,
+            mapping_id=mapping_id,
+            f_start_ghz=f_start_ghz,
+            f_end_ghz=f_end_ghz,
+            deembedded=bool(deembed),
+            process_type=process_type,
+            file_path=str(saved_path),
+            device_count=0,
+            task_id=task.id,
+        )
+        db.add(batch)
+        db.commit()
+        db.refresh(task)
+    except Exception:
+        db.rollback()
+        try:
+            saved_path.unlink()
+        except Exception:
+            pass
+        raise
 
+    # batch + upload_task 已 commit、ZIP 已写盘。下面这一段把 Celery 任务投到
+    # broker；任何失败（Redis 不可达 / kombu OperationalError / 模块缺失等）
+    # 都必须把 upload_task 立刻标 'failed'，否则前端永远轮询不到结果。
     celery_task_id: str | None = None
     try:
         from app.workers.process_batch import process_batch_task
@@ -113,7 +126,17 @@ def create_upload(
         )
         celery_task_id = result.id
     except ImportError:
+        # 单元测试环境可能没装 Celery：保持任务 pending、不报错。
         celery_task_id = None
+    except Exception as exc:
+        # broker 不可达 / 序列化失败等。立即把 task 标 failed 让前端能感知。
+        task.status = "failed"
+        task.error_msg = f"任务投递失败: {exc!s}"
+        task.finished_at = datetime.now(UTC)
+        db.commit()
+        raise HTTPException(
+            status_code=503, detail=f"任务队列暂不可用: {exc!s}"
+        ) from exc
 
     if celery_task_id:
         task.celery_task_id = celery_task_id
