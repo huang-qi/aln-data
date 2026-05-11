@@ -44,11 +44,21 @@ die() {
     exit 1
 }
 
+# 剥掉 .env 值的成对包裹引号 — 用户经常写 DATA_ROOT="/data3/aln"，
+# 直接 cut -d= -f2- 会把引号也带进来，让 mkdir 创建字面 "data3..." 目录。
+strip_quotes() {
+    local v="$1"
+    [[ "${v}" == \"*\" && "${v: -1}" == '"' ]] && v="${v:1:-1}"
+    [[ "${v}" == \'*\' && "${v: -1}" == "'" ]] && v="${v:1:-1}"
+    printf '%s' "${v}"
+}
+
 # ---------- 通用工具 ----------
 get_nginx_port() {
     if [[ -f "${ENV_FILE}" ]]; then
         local v
         v="$(grep -E '^NGINX_PORT=' "${ENV_FILE}" | tail -n1 | cut -d= -f2- || true)"
+        v="$(strip_quotes "${v}")"
         [[ -n "${v}" ]] && { echo "${v}"; return; }
     fi
     echo "${NGINX_PORT_DEFAULT}"
@@ -58,12 +68,27 @@ load_data_root() {
     if [[ -f "${ENV_FILE}" ]]; then
         local v
         v="$(grep -E '^DATA_ROOT=' "${ENV_FILE}" | tail -n1 | cut -d= -f2- || true)"
+        v="$(strip_quotes "${v}")"
         if [[ -n "${v}" ]]; then
             DATA_ROOT="${v}"
             return
         fi
     fi
     DATA_ROOT="${DATA_ROOT_DEFAULT}"
+}
+
+# reset 前的安全闸：拒掉根 / 短路径 / 相对路径，避免 rm -rf 误操作根文件系统。
+assert_data_root_safe() {
+    [[ -n "${DATA_ROOT}" ]]                   || die "DATA_ROOT 为空，拒绝 reset"
+    [[ "${DATA_ROOT}" == /* ]]                || die "DATA_ROOT 必须是绝对路径，拒绝 reset：${DATA_ROOT}"
+    [[ "${DATA_ROOT}" != "/" ]]               || die "DATA_ROOT=/ 危险，拒绝 reset"
+    [[ "${#DATA_ROOT}" -ge 8 ]]               || die "DATA_ROOT 太短（${DATA_ROOT}），拒绝 reset 防误删"
+    [[ "${DATA_ROOT}" != "/home" ]]           || die "DATA_ROOT=/home 危险，拒绝 reset"
+    [[ "${DATA_ROOT}" != "/var" ]]            || die "DATA_ROOT=/var 危险，拒绝 reset"
+    [[ "${DATA_ROOT}" != "/etc" ]]            || die "DATA_ROOT=/etc 危险，拒绝 reset"
+    [[ "${DATA_ROOT}" != "/usr" ]]            || die "DATA_ROOT=/usr 危险，拒绝 reset"
+    [[ "${DATA_ROOT}" != "/tmp" ]]            || die "DATA_ROOT=/tmp 危险，拒绝 reset"
+    [[ "${DATA_ROOT}" != "${HOME}" ]]         || die "DATA_ROOT=\$HOME 危险，拒绝 reset"
 }
 
 # 探测本机对外（局域网）可达 IP。优先默认路由的 src；回落到非 loopback/bridge/link-local 的 IPv4。
@@ -233,6 +258,7 @@ cmd_down() {
 cmd_reset() {
     check_env_file
     check_podman
+    assert_data_root_safe
     cat <<EOF
 ${C_RED}========================================
   WARNING: 即将销毁容器 + 全部业务数据
