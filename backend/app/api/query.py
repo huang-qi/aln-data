@@ -5,7 +5,7 @@ from __future__ import annotations
 from typing import Annotated, Any
 
 from fastapi import APIRouter, HTTPException, Query
-from sqlalchemy import ColumnElement, and_, distinct, func, null, select
+from sqlalchemy import ColumnElement, and_, distinct, func, null, or_, select
 
 from app.api.deps import ALLOWED_QUERY_FIELDS, DEVICE_COLUMNS, DbSession
 from app.models import Batch, Device
@@ -34,51 +34,111 @@ def _escape_like(val: str) -> str:
     return val.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
 
 
+def _leaf_clause(field: str, op: str, val: Any) -> ColumnElement[bool]:
+    col = _resolve_column(field)
+    if op == "in":
+        if not isinstance(val, list) or not val:
+            raise HTTPException(status_code=400, detail=f"{field}.in 必须是非空列表")
+        return col.in_(val)
+    if op == "not_in":
+        if not isinstance(val, list) or not val:
+            raise HTTPException(status_code=400, detail=f"{field}.not_in 必须是非空列表")
+        return ~col.in_(val)
+    if op == "eq":
+        return col == val
+    if op == "neq":
+        return col != val
+    if op == "gte":
+        return col >= val
+    if op == "gt":
+        return col > val
+    if op == "lte":
+        return col <= val
+    if op == "lt":
+        return col < val
+    if op == "between":
+        if not isinstance(val, list) or len(val) != 2:
+            raise HTTPException(
+                status_code=400, detail=f"{field}.between 必须为长度 2 的列表 [lo, hi]"
+            )
+        lo, hi = val
+        return and_(col >= lo, col <= hi)
+    if op == "is_null":
+        return col.is_(None)
+    if op == "not_null":
+        return col.isnot(None)
+    if op == "like":
+        if not isinstance(val, str):
+            raise HTTPException(status_code=400, detail=f"{field}.like 必须为字符串")
+        return col.like(_escape_like(val), escape="\\")
+    if op == "contains":
+        if not isinstance(val, str):
+            raise HTTPException(status_code=400, detail=f"{field}.contains 必须为字符串")
+        return col.like(f"%{_escape_like(val)}%", escape="\\")
+    raise HTTPException(status_code=400, detail=f"不支持的操作符: {field}.{op}")
+
+
 def _build_filter_clause(name: str, spec: Any) -> ColumnElement[bool]:
-    col = _resolve_column(name)
+    """旧版按字段聚合的格式：
+       - list  →  IN
+       - dict  →  多操作符 AND
+       - 标量  →  等值
+    """
     if isinstance(spec, list):
         if not spec:
             raise HTTPException(status_code=400, detail=f"过滤器 {name} 列表不能为空")
-        return col.in_(spec)
+        return _leaf_clause(name, "in", spec)
     if isinstance(spec, dict):
-        clauses: list[ColumnElement[bool]] = []
-        for op, val in spec.items():
-            if op == "in":
-                if not isinstance(val, list) or not val:
-                    raise HTTPException(status_code=400, detail=f"{name}.in 必须是非空列表")
-                clauses.append(col.in_(val))
-            elif op == "eq":
-                clauses.append(col == val)
-            elif op == "neq":
-                clauses.append(col != val)
-            elif op == "gte":
-                clauses.append(col >= val)
-            elif op == "gt":
-                clauses.append(col > val)
-            elif op == "lte":
-                clauses.append(col <= val)
-            elif op == "lt":
-                clauses.append(col < val)
-            elif op == "like":
-                # 保留用户的 % / _ 字面值，避免 "50%" 被解释为前缀模式。
-                # 调用方若想传通配，请用 contains 或 startswith。
-                if not isinstance(val, str):
-                    raise HTTPException(status_code=400, detail=f"{name}.like 必须为字符串")
-                clauses.append(col.like(_escape_like(val), escape="\\"))
-            elif op == "contains":
-                if not isinstance(val, str):
-                    raise HTTPException(status_code=400, detail=f"{name}.contains 必须为字符串")
-                clauses.append(col.like(f"%{_escape_like(val)}%", escape="\\"))
-            else:
-                raise HTTPException(
-                    status_code=400, detail=f"不支持的操作符: {name}.{op}"
-                )
-        return and_(*clauses)
-    return col == spec
+        clauses = [_leaf_clause(name, op, val) for op, val in spec.items()]
+        return and_(*clauses) if len(clauses) > 1 else clauses[0]
+    return _resolve_column(name) == spec
 
 
-def _build_filters(filters: dict[str, Any]) -> list[ColumnElement[bool]]:
-    return [_build_filter_clause(k, v) for k, v in filters.items()]
+def _build_node(node: dict[str, Any]) -> ColumnElement[bool]:
+    """新版树形格式：
+       - 组节点  {"op": "and"|"or", "children": [...]}
+       - 叶节点  {"field": str, "op": str, "value": Any}
+    """
+    if not isinstance(node, dict):
+        raise HTTPException(status_code=400, detail="filter 节点必须是对象")
+    if "field" in node:
+        field = node["field"]
+        op = node.get("op", "eq")
+        val = node.get("value")
+        return _leaf_clause(field, op, val)
+    if "children" in node:
+        op = (node.get("op") or "and").lower()
+        children = node["children"]
+        if not isinstance(children, list):
+            raise HTTPException(status_code=400, detail="children 必须是列表")
+        if not children:
+            # 空组视作恒真，方便 UI 在用户尚未配置任何条件时也能发请求。
+            return null().is_(None)
+        clauses = [_build_node(c) for c in children]
+        if op == "or":
+            return or_(*clauses)
+        if op == "and":
+            return and_(*clauses)
+        raise HTTPException(status_code=400, detail=f"不支持的组合操作符: {op}")
+    raise HTTPException(status_code=400, detail="filter 节点必须含 field 或 children")
+
+
+def _is_tree_filter(filters: Any) -> bool:
+    return (
+        isinstance(filters, dict)
+        and "children" in filters
+        and isinstance(filters.get("children"), list)
+    )
+
+
+def _build_filters(filters: Any) -> list[ColumnElement[bool]]:
+    if not filters:
+        return []
+    if _is_tree_filter(filters):
+        return [_build_node(filters)]
+    if isinstance(filters, dict):
+        return [_build_filter_clause(k, v) for k, v in filters.items()]
+    raise HTTPException(status_code=400, detail="filters 必须是字典")
 
 
 def _aggregate_expr(

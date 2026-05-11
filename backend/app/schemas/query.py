@@ -16,6 +16,11 @@ class MetricSpec(BaseModel):
 
 FilterValue = Any
 
+# `filters` 接受两种格式：
+#   1. 旧版 dict-of-fields：{field: list | dict-of-ops | scalar}，字段间按 AND。
+#   2. 新版 AND/OR 树：{op: "and"|"or", children: [...]}，叶节点 {field, op, value}。
+# 解析逻辑见 app.api.query._build_filters。
+
 
 class QueryRequest(BaseModel):
     filters: dict[str, FilterValue] = Field(default_factory=dict)

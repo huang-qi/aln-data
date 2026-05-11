@@ -847,3 +847,168 @@ input, select, textarea { font-family: inherit; font-size: inherit; color: inher
 
 .explore-radio { margin-bottom: 8px; }
 
+/* ========================================================
+   FilterPanel — 平铺条件 + 顶部 AND/OR 切换
+   ======================================================== */
+.filter-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-bottom: 8px;
+}
+
+.filter-andor {
+  display: inline-flex;
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  overflow: hidden;
+  background: var(--bg-panel);
+  text-transform: none;
+  letter-spacing: 0;
+}
+.filter-andor-btn {
+  padding: 0 8px;
+  height: 20px;
+  font-size: 10.5px;
+  font-weight: 600;
+  font-family: var(--font-sans);
+  background: transparent;
+  border: 0;
+  cursor: pointer;
+  color: var(--fg-3);
+}
+.filter-andor-btn:hover { background: var(--bg-panel-2); }
+.filter-andor-btn.active {
+  background: var(--primary);
+  color: #fff;
+}
+.filter-andor-btn + .filter-andor-btn {
+  border-left: 1px solid var(--border);
+}
+
+.filter-add-btn {
+  height: 22px;
+  padding: 0 8px;
+  font-size: 11px;
+  margin-bottom: 4px;
+}
+.filter-icon-btn {
+  height: 24px;
+  width: 24px;
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+}
+
+.filter-cond {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex-wrap: nowrap;
+}
+.filter-cond .input.mono,
+.filter-cond select.input.mono {
+  height: 24px;
+  padding: 0 4px;
+  font-size: 11px;
+}
+.filter-field-sel {
+  flex: 1 1 110px;
+  min-width: 0;
+}
+.filter-op-sel {
+  flex: 0 0 auto;
+  min-width: 64px;
+}
+.filter-value-range {
+  display: inline-flex;
+  align-items: center;
+  flex: 1 1 110px;
+  min-width: 0;
+}
+.filter-value-range .input.mono { flex: 1; min-width: 0; }
+.filter-value-placeholder {
+  flex: 1 1 100px;
+  font-size: 10.5px;
+  color: var(--fg-4);
+  font-family: var(--font-mono);
+  padding-left: 4px;
+}
+
+/* ---- 内联多选下拉 ---- */
+.filter-multiselect {
+  position: relative;
+  flex: 1 1 110px;
+  min-width: 0;
+  display: inline-flex;
+}
+.filter-multiselect-btn {
+  height: 24px;
+  padding: 0 6px;
+  font-size: 11px;
+  width: 100%;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  cursor: pointer;
+  background: var(--bg-panel);
+  text-align: left;
+  overflow: hidden;
+}
+.filter-multiselect-btn.active {
+  background: var(--primary-soft);
+  border-color: var(--primary);
+  color: var(--primary);
+}
+.filter-multiselect-summary {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.filter-multiselect-caret {
+  font-size: 10px;
+  color: var(--fg-4);
+  flex-shrink: 0;
+}
+.filter-multiselect-pop {
+  position: absolute;
+  top: 100%;
+  left: 0;
+  z-index: 30;
+  margin-top: 2px;
+  min-width: 100%;
+  max-width: 240px;
+  background: var(--bg-panel);
+  border: 1px solid var(--border-strong);
+  border-radius: 4px;
+  box-shadow: 0 4px 12px rgba(15, 23, 42, 0.12);
+  padding: 4px;
+}
+.filter-multiselect-actions {
+  display: flex;
+  gap: 4px;
+  padding: 2px 2px 4px;
+  border-bottom: 1px solid var(--border-soft);
+  margin-bottom: 4px;
+}
+.filter-multiselect-list {
+  max-height: 220px;
+  overflow: auto;
+  display: flex;
+  flex-direction: column;
+}
+.filter-multiselect-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 6px;
+  font-size: 11px;
+  cursor: pointer;
+  position: relative;
+  border-radius: 3px;
+}
+.filter-multiselect-item:hover { background: var(--bg-panel-2); }
+
