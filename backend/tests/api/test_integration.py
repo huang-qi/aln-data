@@ -201,6 +201,55 @@ def test_query_field_whitelist(client: TestClient) -> None:
     assert r.status_code == 400
 
 
+def test_upload_cleans_orphan_zip_when_db_commit_fails(
+    client: TestClient, sample_mapping: Path, sample_zip: Path, monkeypatch
+) -> None:
+    """db.commit() 抛 IntegrityError 时（模拟 batch_no unique 冲突的 TOCTOU race），
+    我们的 except 必须 unlink 已写盘的 zip，不能孤儿占盘。"""
+    with sample_mapping.open("rb") as f:
+        r = client.post(
+            "/api/mappings",
+            files={"file": ("orphan_test.xlsx", f)},
+            data={"name": "orphan_test"},
+        )
+    assert r.status_code == 201
+    mapping_id = r.json()["id"]
+
+    from app.config import get_settings
+    uploads_dir = get_settings().uploads_dir
+    before_zips = sorted(p for p in uploads_dir.rglob("*.zip") if p.is_file())
+
+    # patch Session.commit 在第一次调用就抛 IntegrityError
+    from sqlalchemy.exc import IntegrityError
+    from sqlalchemy.orm import Session as _Session
+    orig_commit = _Session.commit
+    state = {"calls": 0}
+
+    def boom_commit(self, *a, **kw):
+        state["calls"] += 1
+        if state["calls"] == 1:
+            raise IntegrityError("simulated dup", None, Exception("simulated"))
+        return orig_commit(self, *a, **kw)
+
+    monkeypatch.setattr(_Session, "commit", boom_commit, raising=True)
+
+    # TestClient 默认会 re-raise 未捕获的异常；commit fail 后我们的 except
+    # 会 unlink 文件再 raise，TestClient 把 IntegrityError 抛回这里。
+    with pytest.raises(IntegrityError), sample_zip.open("rb") as f:
+        client.post(
+            "/api/uploads",
+            files={"file": ("orphan_new.zip", f)},
+            data={"mapping_id": str(mapping_id), "process_type": "S1P"},
+        )
+
+    monkeypatch.undo()
+
+    # 关键断言：uploads_dir 的 zip 数不应增加（孤儿 zip 被清掉）
+    after_zips = sorted(p for p in uploads_dir.rglob("*.zip") if p.is_file())
+    new_zips = set(after_zips) - set(before_zips)
+    assert not new_zips, f"DB 失败后留下孤儿 zip: {new_zips}"
+
+
 def test_upload_marks_task_failed_when_broker_unreachable(
     client: TestClient, sample_mapping: Path, sample_zip: Path, monkeypatch
 ) -> None:
