@@ -64,6 +64,14 @@ services:
     ports:
       - "8001:8000"  # host 8000 被占用，改 8001；全接口绑定让 nginx 容器走 host-gateway 回连
     command: ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "4"]
+    # 用 python 内置 urllib 跑探活 — slim 镜像没装 wget/curl，加 apt 又胖一圈。
+    # /api/health 在 system.py 里实现，DB/Redis 任一异常返回 degraded 但仍 200 OK。
+    healthcheck:
+      test: ["CMD", "python", "-c", "import sys,urllib.request as u; sys.exit(0 if u.urlopen('http://127.0.0.1:8000/api/health', timeout=3).status==200 else 1)"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
 
   worker:
     build:
@@ -93,7 +101,8 @@ services:
     container_name: aln-nginx
     restart: unless-stopped
     depends_on:
-      - api
+      api:
+        condition: service_healthy   # 等 api 真就绪，避免 boot 期间 nginx 502
     ports:
       - "${NGINX_PORT:-8080}:80"
     extra_hosts:
