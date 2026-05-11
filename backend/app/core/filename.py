@@ -21,8 +21,13 @@ _MARK_RE = re.compile(r"([A-Za-z]+\d+-\d+)")
 _COORD_RE = re.compile(r"X([+-]?\d+)Y([+-]?\d+)", re.IGNORECASE)
 _PORT_SUFFIX_RE = re.compile(r"_(S\d{2})(?:\.s1p)?$", re.IGNORECASE)
 _PORT_PREFIX_RE = re.compile(r"^(S\d{2})(?:_\d+)?_", re.IGNORECASE)
-_OPEN_RE = re.compile(r"\bOPEN\b", re.IGNORECASE)
-_SHORT_RE = re.compile(r"\bSHORT\b", re.IGNORECASE)
+# 校准文件名形如 OPEN.s2p / OPEN_1.s2p / SHORT-3.s2p / cal_OPEN.s2p / cal_SHORT_2.s2p。
+# 原来的 \bOPEN\b 因为 `_` 属于 \w，碰到 `cal_OPEN_2` 时前后都是 \w → 没有
+# word boundary → match 失败，校准文件被误当作 DUT 走错路径。
+# 用"前后不是字母"约束（允许 _/-/digit/边界），既挡住 OPENING/OPENED 等真单词，
+# 又能匹配客户参考脚本 (de.py 第 86 行) `(OPEN|SHORT)[_-](\d+)` 同样语义的所有变体。
+_OPEN_RE = re.compile(r"(?<![A-Za-z])OPEN(?![A-Za-z])", re.IGNORECASE)
+_SHORT_RE = re.compile(r"(?<![A-Za-z])SHORT(?![A-Za-z])", re.IGNORECASE)
 
 
 @dataclass(frozen=True)
