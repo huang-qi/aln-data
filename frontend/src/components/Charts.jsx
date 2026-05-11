@@ -21,7 +21,8 @@ const baseLayout = {
 const baseConfig = {
   displaylogo: false,
   responsive: true,
-  modeBarButtonsToRemove: ['select2d', 'lasso2d'],
+  // select2d / lasso2d 启用 — Explore.jsx 监听 onSelected 实现"框选隐藏点"
+  modeBarButtonsToRemove: [],
 };
 
 const PALETTE = ['#2c79f6', '#0e9488', '#c97a16', '#7b3fe4', '#1e8a5a', '#c2410c', '#0e6bb0', '#b58900',
@@ -564,6 +565,7 @@ export function WaferMap({
   facetField, facets,
   aggregated = false,
   onPointClick,
+  onSelection,
 }) {
   const allXs = rows.map((r) => r['x']).filter(Number.isFinite);
   const allYs = rows.map((r) => r['y']).filter(Number.isFinite);
@@ -696,6 +698,7 @@ export function WaferMap({
           onPointClick(e.points[0].customdata);
         }
       }}
+      onSelected={onSelection}
     />
   );
 }
@@ -791,6 +794,7 @@ function buildScatterTraces({ rows, xField, yField, zField, axisRef, useGl, zCat
         opacity: 0.85,
       },
       showlegend: false,
+      customdata: rows,
       hovertemplate: `<b>%{x}</b>, %{y}<br>${axisTitle(zField)}: %{marker.color}<extra></extra>`,
     });
   } else if (zField && zField.isCategorical) {
@@ -818,6 +822,7 @@ function buildScatterTraces({ rows, xField, yField, zField, axisRef, useGl, zCat
           opacity: 0.78,
           line: (xIsCat || yIsCat) ? { width: 0.5, color: '#ffffff80' } : undefined,
         },
+        customdata: grp,
         hovertemplate: `<b>%{x}</b>, %{y}<extra>${zv}</extra>`,
       });
       i++;
@@ -834,6 +839,7 @@ function buildScatterTraces({ rows, xField, yField, zField, axisRef, useGl, zCat
       name: 'all',
       showlegend: false,
       marker: { size: (xIsCat || yIsCat) ? 6 : 5, color: PALETTE[0], opacity: 0.78 },
+      customdata: rows,
       hovertemplate: `<b>%{x}</b>, %{y}<extra></extra>`,
     });
   }
@@ -1084,6 +1090,196 @@ function buildViolinTraces({ rows, xField, yField, zField, axisRef, zCategoryVal
   return traces;
 }
 
+// Swarm (beeswarm) plot for one cell.
+//
+// Each X tick owns a horizontal "slot" of width 1 on the (forced) category
+// axis. Within a slot we lay every sample out as a point: same Y as the
+// data, but X is jittered DETERMINISTICALLY so points fan out by local
+// density — visually similar to a violin's silhouette, but every dot is a
+// real sample.
+//
+// Above SWARM_GL_THRESHOLD rows we render via scattergl (WebGL) instead of
+// scatter (SVG) — pan/zoom/hover stops thrashing the DOM tree once the
+// total marker count climbs into the tens of thousands. scattergl ignores
+// most marker.line settings, so we drop the white outline in that mode
+// (it would just render as fuzz anyway).
+const SWARM_GL_THRESHOLD = 5000;
+//
+// Algorithm (histogram-binned beeswarm):
+//   1. Bin Y values into K equal-width buckets across the global Y range.
+//   2. Within each bucket, points are placed at offsets 0, +d, -d, +2d,
+//      -2d, ... around the slot center.
+//   3. d is chosen per "column" (X category × Z subgroup) so the densest
+//      bucket fits inside that column's allowed width.
+//
+// On a category axis Plotly accepts numeric X values, interpreting them as
+// fractional tick indices — that's how we can offset points off their
+// tick without breaking the categorical axis.
+//
+// First version: only numeric Y. Categorical Y is reported via a warning
+// so the caller can prompt the user to switch chart.
+function buildSwarmTraces({ rows, xField, yField, zField, axisRef, zCategoryValues, showLegend, xCategoryArray }) {
+  const xKey = xField.name;
+  const yKey = yField.name;
+  const xref = `x${axisRef}`;
+  const yref = `y${axisRef}`;
+  const yIsCat = !!yField.isCategorical;
+  const traces = [];
+
+  if (yIsCat) return traces;
+
+  const useGl = rows.length >= SWARM_GL_THRESHOLD;
+  const traceType = useGl ? 'scattergl' : 'scatter';
+  const markerLine = useGl ? undefined : { width: 0.5, color: '#ffffff80' };
+
+  const xCats = xCategoryArray || [];
+  const xIndexOf = new Map(xCats.map((v, i) => [v, i]));
+
+  const SLOT_PAD = 0.8;
+  const N_BINS = 30;
+
+  let yMin = Infinity, yMax = -Infinity;
+  for (const r of rows) {
+    const v = r[yKey];
+    if (!Number.isFinite(v)) continue;
+    if (v < yMin) yMin = v;
+    if (v > yMax) yMax = v;
+  }
+  if (!Number.isFinite(yMin) || !Number.isFinite(yMax)) return traces;
+  const yRange = (yMax - yMin) || 1;
+  const binWidth = yRange / N_BINS;
+
+  // Place a group of rows at (cx, slotW): returns swarmed coordinates +
+  // original rows kept aligned so customdata still resolves on hover.
+  const swarmGroup = (group, cx, slotW) => {
+    const xs = new Array(group.length);
+    const ys = new Array(group.length);
+    if (group.length === 0) return { xs, ys };
+    const binIdxs = new Array(group.length);
+    const binCounts = new Map();
+    for (let i = 0; i < group.length; i++) {
+      const v = group[i][yKey];
+      if (!Number.isFinite(v)) { binIdxs[i] = -1; continue; }
+      let b = Math.floor((v - yMin) / binWidth);
+      if (b >= N_BINS) b = N_BINS - 1;
+      if (b < 0) b = 0;
+      binIdxs[i] = b;
+      binCounts.set(b, (binCounts.get(b) || 0) + 1);
+    }
+    let maxBin = 1;
+    for (const c of binCounts.values()) if (c > maxBin) maxBin = c;
+    // Spread the densest bucket across the available width. Divide by
+    // (maxBin - 1) so the outermost points sit on the slot edges; clamp
+    // to avoid 1/0 for singleton buckets.
+    const d = (maxBin > 1) ? (slotW * SLOT_PAD) / (maxBin - 1) : 0;
+    const binProgress = new Map();
+    for (let i = 0; i < group.length; i++) {
+      ys[i] = group[i][yKey];
+      const b = binIdxs[i];
+      if (b < 0) { xs[i] = cx; continue; }
+      const k = binProgress.get(b) || 0;
+      binProgress.set(b, k + 1);
+      const sign = (k % 2 === 0) ? 1 : -1;
+      const mag = Math.ceil(k / 2);
+      xs[i] = cx + sign * mag * d;
+    }
+    return { xs, ys };
+  };
+
+  // Pre-bucket rows by (X category, Z value) — single O(n) scan vs.
+  // O(n × |X| × |Z|) repeated filters.
+  const hasZ = !!(zField && zField.isCategorical);
+  const zKey = hasZ ? zField.name : null;
+  const groupKey = (xc, zv) => `${xc}${zv}`;
+  const groups = new Map();
+  for (const r of rows) {
+    const xc = String(r[xKey]);
+    if (!xIndexOf.has(xc)) continue;
+    const zv = hasZ
+      ? (isNullish(r[zKey]) ? NULL_KEY : r[zKey])
+      : '__all__';
+    const k = groupKey(xc, zv);
+    let arr = groups.get(k);
+    if (!arr) { arr = []; groups.set(k, arr); }
+    arr.push(r);
+  }
+
+  if (hasZ) {
+    const zVals = zCategoryValues || distinctSortedValues(rows, zKey, { includeNull: true });
+    const nZ = zVals.length || 1;
+    const subSlotW = 1 / nZ;
+    let i = 0;
+    for (const zv of zVals) {
+      const c = PALETTE[i % PALETTE.length];
+      const zCenter = -0.5 + (i + 0.5) * subSlotW;
+      const allXs = [];
+      const allYs = [];
+      const allCustom = [];
+      for (const xc of xCats) {
+        const grp = groups.get(groupKey(xc, zv)) || [];
+        const tickIdx = xIndexOf.get(xc);
+        const { xs, ys } = swarmGroup(grp, tickIdx + zCenter, subSlotW);
+        allXs.push(...xs);
+        allYs.push(...ys);
+        allCustom.push(...grp);
+      }
+      traces.push({
+        type: traceType,
+        mode: 'markers',
+        x: allXs,
+        y: allYs,
+        xaxis: xref,
+        yaxis: yref,
+        name: String(zv),
+        legendgroup: String(zv),
+        showlegend: showLegend,
+        marker: {
+          size: 5,
+          color: c,
+          opacity: 0.78,
+          line: markerLine,
+        },
+        customdata: allCustom,
+        hovertemplate: `<b>${axisTitle(xField)}</b>=%{customdata.${xKey}}<br>${axisTitle(yField)}=%{y}<extra>${zv}</extra>`,
+      });
+      i++;
+    }
+  } else {
+    const c = PALETTE[0];
+    const allXs = [];
+    const allYs = [];
+    const allCustom = [];
+    for (const xc of xCats) {
+      const grp = groups.get(groupKey(xc, '__all__')) || [];
+      const tickIdx = xIndexOf.get(xc);
+      const { xs, ys } = swarmGroup(grp, tickIdx, 1);
+      allXs.push(...xs);
+      allYs.push(...ys);
+      allCustom.push(...grp);
+    }
+    traces.push({
+      type: traceType,
+      mode: 'markers',
+      x: allXs,
+      y: allYs,
+      xaxis: xref,
+      yaxis: yref,
+      name: axisTitle(yField),
+      showlegend: false,
+      marker: {
+        size: 5,
+        color: c,
+        opacity: 0.78,
+        line: markerLine,
+      },
+      customdata: allCustom,
+      hovertemplate: `<b>${axisTitle(xField)}</b>=%{customdata.${xKey}}<br>${axisTitle(yField)}=%{y}<extra></extra>`,
+    });
+  }
+
+  return traces;
+}
+
 // Line plot for one cell. Within each Z group, points are sorted by X
 // so the line is monotone left→right (rather than connecting points in
 // trace-array order, which gives a tangled mess).
@@ -1205,11 +1401,12 @@ const BUILDER_MAP = {
   scatter: buildScatterTraces,
   box: buildBoxTraces,
   violin: buildViolinTraces,
+  swarm: buildSwarmTraces,
   line: buildLineTraces,
 };
 
-// Chart types that ignore numeric Z (box/violin/line).
-const Z_NUMERIC_UNSUPPORTED = new Set(['box', 'violin', 'line']);
+// Chart types that ignore numeric Z (box/violin/swarm/line).
+const Z_NUMERIC_UNSUPPORTED = new Set(['box', 'violin', 'swarm', 'line']);
 
 const PERF_GL_THRESHOLD = 50000;
 // Hard ceiling on the number of distinct X categorical ticks per cell.
@@ -1227,6 +1424,8 @@ export function UnifiedChartGrid({
   width = null,
   onPerformanceWarn,
   onWarn,
+  onPointClick,
+  onSelection,
 }) {
   const cols = (xFields || []).length;
   const nRows = (yFields || []).length;
@@ -1317,7 +1516,7 @@ export function UnifiedChartGrid({
       //   (a) the field itself is categorical, or
       //   (b) it's a box/violin chart with numeric Y (we bin by X tick)
       const xAsCategory = !!xField.isCategorical
-        || ((chartType === 'box' || chartType === 'violin') && !yIsCat);
+        || ((chartType === 'box' || chartType === 'violin' || chartType === 'swarm') && !yIsCat);
       let xCategoryArray = null;
       if (xAsCategory) {
         const allCats = distinctSortedValues(rows, xField.name).map(String);
@@ -1335,9 +1534,24 @@ export function UnifiedChartGrid({
         } else {
           xCategoryArray = allCats;
         }
-        xLayout.type = 'category';
-        xLayout.categoryorder = 'array';
-        xLayout.categoryarray = xCategoryArray;
+        if (chartType === 'swarm') {
+          // Swarm renders each point at (tickIdx + jitter, y) using numeric
+          // X values. If we set the axis type to 'category', Plotly would
+          // re-interpret those numeric Xs as brand-new string categories
+          // (e.g. "0.25") and stack them next to the real category ticks,
+          // which is exactly the bug we hit on the first prototype. Render
+          // the X axis as linear with manual ticks taken from the category
+          // list instead.
+          xLayout.type = 'linear';
+          xLayout.tickmode = 'array';
+          xLayout.tickvals = xCategoryArray.map((_, i) => i);
+          xLayout.ticktext = xCategoryArray;
+          xLayout.range = [-0.5, xCategoryArray.length - 0.5];
+        } else {
+          xLayout.type = 'category';
+          xLayout.categoryorder = 'array';
+          xLayout.categoryarray = xCategoryArray;
+        }
       }
 
       layout[xAxisKey] = xLayout;
@@ -1367,6 +1581,12 @@ export function UnifiedChartGrid({
         showarrow: false,
         font: { size: 12, color: '#334155' },
       });
+
+      // Swarm + categorical Y is not supported yet — flag instead of silently
+      // returning zero traces.
+      if (chartType === 'swarm' && yIsCat) {
+        pendingWarns.push({ kind: 'swarm_y_categorical', yField: yField.name });
+      }
 
       const cellTraces = builder({
         rows,
@@ -1417,6 +1637,16 @@ export function UnifiedChartGrid({
       config={baseConfig}
       style={{ width: '100%', height: layout.height }}
       useResizeHandler
+      onClick={(e) => {
+        // Aggregated/statistical traces (box/violin/line) don't carry
+        // per-point customdata, so clicks there short-circuit harmlessly.
+        // Scatter / swarm traces stash the original row as customdata so
+        // the click resolves back to a single device row.
+        if (!onPointClick) return;
+        const p = e.points && e.points[0];
+        if (p && p.customdata) onPointClick(p.customdata);
+      }}
+      onSelected={onSelection}
     />
   );
 }

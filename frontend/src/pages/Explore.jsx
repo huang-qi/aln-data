@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import I from '../components/Icons.jsx';
 import { UnifiedChartGrid, WaferMap } from '../components/Charts.jsx';
 import useFields, { displayLabel } from '../hooks/useFields.js';
@@ -68,6 +68,7 @@ const CHART_TYPES = [
   { key: 'scatter', label: '散点图', icon: 'scatter' },
   { key: 'box',     label: '箱型图', icon: 'box' },
   { key: 'violin',  label: '小提琴', icon: 'box' },
+  { key: 'swarm',   label: '蜂群图', icon: 'box' },
   { key: 'line',    label: '折线图', icon: 'line' },
   { key: 'wafer',   label: 'Wafer 版图', icon: 'wafer' },
 ];
@@ -121,6 +122,31 @@ export default function Explore() {
   const [error, setError] = useState(null);
   const [activeDevice, setActiveDevice] = useState(null);
   const [exporting, setExporting] = useState(false);
+
+  // 图上框选隐藏点：纯客户端、跨 chart type 全局。
+  //   - hiddenIds:    当前被隐藏的 row.id 集合
+  //   - prevHiddenIds: 单步撤销栈（null = 无可撤销）
+  //   - shiftHeldRef: 全局 Shift 键状态。Plotly 的 onSelected 事件不带
+  //                   modifier，需要我们自己跟。
+  const [hiddenIds, setHiddenIds] = useState(() => new Set());
+  const [prevHiddenIds, setPrevHiddenIds] = useState(null);
+  const shiftHeldRef = useRef(false);
+
+  useEffect(() => {
+    const down = (e) => { if (e.key === 'Shift') shiftHeldRef.current = true; };
+    const up   = (e) => { if (e.key === 'Shift') shiftHeldRef.current = false; };
+    // 窗口失焦时把 ref 复位 — 否则用户切窗口期间松开 Shift，回来后
+    // ref 残留 true 会让下一次"只看"误判成"隐藏"。
+    const blur = () => { shiftHeldRef.current = false; };
+    window.addEventListener('keydown', down);
+    window.addEventListener('keyup', up);
+    window.addEventListener('blur', blur);
+    return () => {
+      window.removeEventListener('keydown', down);
+      window.removeEventListener('keyup', up);
+      window.removeEventListener('blur', blur);
+    };
+  }, []);
 
   const isWafer = chartType === 'wafer';
 
@@ -342,9 +368,9 @@ export default function Explore() {
     });
   }, [rows, isWafer, waferFacet]);
 
-  // Heuristic warning: violin/box with no categorical X is awkward.
+  // Heuristic warning: violin/box/swarm with no categorical X is awkward.
   const violinXWarning = useMemo(() => {
-    if (!(chartType === 'violin' || chartType === 'box')) return null;
+    if (!(chartType === 'violin' || chartType === 'box' || chartType === 'swarm')) return null;
     if (xMeta.length === 0) return null;
     const allNumeric = xMeta.every((f) => !f.isCategorical);
     if (allNumeric) return '建议至少选一个类别字段做 X（例如 EG / batch_no），否则会被强制按数值分箱';
@@ -368,10 +394,90 @@ export default function Explore() {
       return `当前图表（${w.chartType}）不支持数值 Z（"${w.zField}"）做颜色编码，已忽略 — 请改选类别字段或切换到散点图`;
     }
     if (w.kind === 'x_categories_clamped') {
-      return `X 字段 "${w.xField}" 共 ${w.total} 个不同值，超出 box/violin 渲染上限，仅显示前 ${w.shown} 个 — 建议改用散点图或选数值更少的 X`;
+      return `X 字段 "${w.xField}" 共 ${w.total} 个不同值，超出 box/violin/swarm 渲染上限，仅显示前 ${w.shown} 个 — 建议改用散点图或选数值更少的 X`;
+    }
+    if (w.kind === 'swarm_y_categorical') {
+      return `蜂群图暂不支持类别 Y 字段 "${w.yField}" — 请切到箱型图/小提琴图`;
     }
     return JSON.stringify(w);
   };
+
+  // ── 图上框选隐藏点：派生与 handler ──────────────────────────────────
+  // visibleRows = rows 中 id 不在 hiddenIds 内的子集。hiddenIds 空时直接
+  // 复用 rows 引用，避免重复 filter 触发下游 useMemo。
+  const visibleRows = useMemo(
+    () => (hiddenIds.size === 0 ? rows : rows.filter((r) => !hiddenIds.has(r.id))),
+    [rows, hiddenIds],
+  );
+  // 顶部小条显示的计数：只算当前 rows 里实际命中的，避免 stale id（filters
+  // 改过后 hiddenIds 里有些 id 已经不在 rows 里）让用户误以为还隐藏着很多。
+  const hiddenInCurrentRows = useMemo(
+    () => (hiddenIds.size === 0 ? 0 : rows.reduce((n, r) => n + (hiddenIds.has(r.id) ? 1 : 0), 0)),
+    [rows, hiddenIds],
+  );
+
+  function handleSelection(e) {
+    if (!e || !Array.isArray(e.points)) return;
+    const selectedIds = new Set();
+    for (const p of e.points) {
+      const row = p.customdata;
+      // 聚合 trace（box/violin/line 的统计点）没有原始 row 或缺 id，跳过。
+      // aggregated 模式（wafer 聚合 / Y/Z 聚合）的 row 也无 id，自动 no-op。
+      if (row && row.id != null) selectedIds.add(row.id);
+    }
+    if (selectedIds.size === 0) return;
+
+    const shift = shiftHeldRef.current;
+    let next;
+    if (shift) {
+      // Shift+拖 = 隐藏选中
+      next = new Set(hiddenIds);
+      for (const id of selectedIds) next.add(id);
+    } else {
+      // 默认拖 = 只看选中。等价于把当前 visible 里未选中的全部加入 hidden。
+      // 防御：如果 visible 里没有一行命中 selectedIds（例如选区完全是
+      // box/violin 的均值点），别误把所有 visible 都隐藏掉。
+      const remainingVisible = visibleRows.reduce(
+        (n, r) => n + (selectedIds.has(r.id) ? 1 : 0),
+        0,
+      );
+      if (remainingVisible === 0) return;
+      next = new Set(hiddenIds);
+      for (const r of visibleRows) {
+        if (!selectedIds.has(r.id)) next.add(r.id);
+      }
+    }
+
+    // no-op 检测：next 与 hiddenIds 完全一致就跳过（避免污染撤销栈）。
+    if (next.size === hiddenIds.size) {
+      let same = true;
+      for (const id of next) if (!hiddenIds.has(id)) { same = false; break; }
+      if (same) return;
+    }
+
+    setPrevHiddenIds(hiddenIds);
+    setHiddenIds(next);
+  }
+
+  function handleUndo() {
+    if (prevHiddenIds == null) return;
+    setHiddenIds(prevHiddenIds);
+    setPrevHiddenIds(null);
+  }
+  function handleClear() {
+    if (hiddenIds.size === 0) return;
+    setPrevHiddenIds(hiddenIds);
+    setHiddenIds(new Set());
+  }
+  function handleInvert() {
+    // 反选保留：现在看见的 → 隐藏；现在隐藏的（且在 rows 里）→ 露出。
+    // hiddenIds 里的 stale id（不在 rows）按反选语义被丢弃。
+    if (visibleRows.length === 0 && hiddenIds.size === 0) return;
+    const next = new Set();
+    for (const r of visibleRows) next.add(r.id);
+    setPrevHiddenIds(hiddenIds);
+    setHiddenIds(next);
+  }
 
   return (
     <>
@@ -455,6 +561,50 @@ export default function Explore() {
                       ))}
                     </div>
                   )}
+                  {hiddenIds.size > 0 && (
+                    <div className="explore-hiddenbar" style={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: 10,
+                      padding: '6px 12px',
+                      background: 'rgba(44, 121, 246, 0.06)',
+                      borderBottom: '1px solid rgba(44, 121, 246, 0.25)',
+                      fontSize: 11.5,
+                      color: '#1e3a5f',
+                    }}>
+                      <span style={{ fontWeight: 600 }}>
+                        已隐藏 {hiddenInCurrentRows} 个点
+                      </span>
+                      <button
+                        className="btn"
+                        style={{ padding: '2px 8px', fontSize: 11 }}
+                        onClick={handleInvert}
+                        title="把当前可见的点反过来隐藏（露出之前隐藏的）"
+                      >
+                        反选保留
+                      </button>
+                      <button
+                        className="btn"
+                        style={{ padding: '2px 8px', fontSize: 11 }}
+                        onClick={handleUndo}
+                        disabled={prevHiddenIds == null}
+                        title="撤销上一步隐藏操作"
+                      >
+                        撤销
+                      </button>
+                      <button
+                        className="btn"
+                        style={{ padding: '2px 8px', fontSize: 11 }}
+                        onClick={handleClear}
+                        title="清空所有隐藏，显示全部"
+                      >
+                        清空
+                      </button>
+                      <span style={{ marginLeft: 'auto', color: 'var(--fg-4)', fontSize: 11 }}>
+                        提示：先点工具条 lasso / 框选；拖 = 只看选中，Shift+拖 = 隐藏选中
+                      </span>
+                    </div>
+                  )}
                   {!isWafer && (xMeta.length === 0 || yMeta.length === 0) && (
                     <div style={{ padding: 40, color: 'var(--fg-4)', textAlign: 'center' }}>
                       请至少选择 1 个 X 字段和 1 个 Y 字段
@@ -463,16 +613,18 @@ export default function Explore() {
                   {!isWafer && xMeta.length > 0 && yMeta.length > 0 && (
                     <UnifiedChartGrid
                       chartType={chartType}
-                      rows={rows}
+                      rows={visibleRows}
                       xFields={xMeta}
                       yFields={yMeta}
                       zField={zMeta}
                       onWarn={onChartWarn}
+                      onPointClick={(d) => setActiveDevice(d)}
+                      onSelection={handleSelection}
                     />
                   )}
                   {isWafer && (
                     <WaferMap
-                      rows={rows}
+                      rows={visibleRows}
                       valueField={waferZ.name}
                       valueLabel={waferZMeta ? displayLabel(waferZMeta) : waferZ.name}
                       facetField={waferFacet !== NO_FACET ? waferFacet : null}
@@ -481,6 +633,7 @@ export default function Explore() {
                       // 聚合模式下一格已合并多器件，没有 device.id 可跳详情；
                       // 不传 onPointClick 让 WaferMap 内部禁用点击。
                       onPointClick={useAggregate ? undefined : (d) => setActiveDevice(d)}
+                      onSelection={handleSelection}
                     />
                   )}
                 </div>
