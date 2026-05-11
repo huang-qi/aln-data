@@ -19,6 +19,9 @@ from app.schemas.query import (
 router = APIRouter(prefix="/query", tags=["query"])
 
 LIMIT_HARD_CAP = 200_000
+# filter 树深度上限。一个真实 UI 极少超过 ~5 层；32 给手写 JSON 留充足余量，
+# 又能挡住恶意嵌套（Python 默认递归上限约 1000）触发 RecursionError → 500。
+FILTER_MAX_DEPTH = 32
 
 
 def _resolve_column(name: str) -> ColumnElement[Any]:
@@ -94,11 +97,18 @@ def _build_filter_clause(name: str, spec: Any) -> ColumnElement[bool]:
     return _resolve_column(name) == spec
 
 
-def _build_node(node: dict[str, Any]) -> ColumnElement[bool]:
+def _build_node(node: dict[str, Any], depth: int = 0) -> ColumnElement[bool]:
     """新版树形格式：
        - 组节点  {"op": "and"|"or", "children": [...]}
        - 叶节点  {"field": str, "op": str, "value": Any}
+
+    depth 上限防止深度嵌套触发 Python RecursionError → 500 DoS。
     """
+    if depth > FILTER_MAX_DEPTH:
+        raise HTTPException(
+            status_code=400,
+            detail=f"filter 树嵌套过深（上限 {FILTER_MAX_DEPTH} 层）",
+        )
     if not isinstance(node, dict):
         raise HTTPException(status_code=400, detail="filter 节点必须是对象")
     if "field" in node:
@@ -114,7 +124,7 @@ def _build_node(node: dict[str, Any]) -> ColumnElement[bool]:
         if not children:
             # 空组视作恒真，方便 UI 在用户尚未配置任何条件时也能发请求。
             return null().is_(None)
-        clauses = [_build_node(c) for c in children]
+        clauses = [_build_node(c, depth + 1) for c in children]
         if op == "or":
             return or_(*clauses)
         if op == "and":

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import time
 from collections.abc import AsyncIterator
 
 import redis.asyncio as aioredis
@@ -18,6 +19,10 @@ from app.models import UploadTask
 from app.schemas.task import TaskDetail, TaskListItem
 
 router = APIRouter(prefix="/tasks", tags=["tasks"])
+
+# SSE 流最长持续时间。worker 崩溃 / Redis 消息丢失时，避免连接永远 yield ping
+# 占住 pubsub 与 fd；超时后 yield error 让客户端要么放弃要么重连查 /tasks/{id}。
+_STREAM_MAX_SECONDS = 3600
 
 
 @router.get("", response_model=list[TaskListItem])
@@ -75,7 +80,16 @@ async def _stream_task_events(task_id: int) -> AsyncIterator[dict]:
                 yield {"event": event, "data": json.dumps(payload)}
                 return
 
+        start_ts = time.monotonic()
         while True:
+            if time.monotonic() - start_ts > _STREAM_MAX_SECONDS:
+                yield {
+                    "event": "error",
+                    "data": json.dumps(
+                        {"error_msg": f"流超时 {_STREAM_MAX_SECONDS}s，请重新拉取任务状态"}
+                    ),
+                }
+                return
             try:
                 msg = await asyncio.wait_for(
                     pubsub.get_message(ignore_subscribe_messages=True, timeout=15.0),

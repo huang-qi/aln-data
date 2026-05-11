@@ -190,10 +190,18 @@ def process_batch_task(
 
     except Exception as exc:
         logger.exception("process_batch_task fatal")
+        # 中间任意 SQL 失败都会把 session 锁进 invalid 状态，后续 db.execute() 会
+        # 直接抛 InvalidRequestError。先 rollback 复位，publisher.fail() 那条 UPDATE
+        # 才能落库——不然 upload_tasks 行永远停在 'running'，前端轮询不到结果。
+        try:
+            db.rollback()
+        except Exception:
+            logger.exception("rollback failed before publishing failure")
         try:
             publisher.fail(db, error_msg=str(exc))
-        finally:
-            pass
+        except Exception:
+            # publisher.fail 自身再失败也别覆盖原始异常——记日志、继续 raise 原始 exc。
+            logger.exception("publisher.fail itself raised; upload task status may be stale")
         raise
     finally:
         db.close()

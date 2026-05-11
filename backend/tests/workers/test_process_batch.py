@@ -63,6 +63,65 @@ def staged_files(tmp_path: Path, sample_zip: Path, sample_mapping: Path, monkeyp
     return staged_zip, staged_mapping
 
 
+def test_failure_path_marks_upload_task_failed(clean_db, staged_files):
+    """触发 process_batch_task 跑失败：upload_tasks 必须落到 'failed' 而不是停在 'running'。
+
+    历史 bug：异常处理里有 `try: publisher.fail() finally: pass`，publisher.fail
+    自身再抛异常（比如 session 已经 invalid）时被静默吞掉，原始异常被替换，
+    upload_tasks 永远停在 running。
+    """
+    _, staged_mapping = staged_files
+    db = SessionLocal()
+    try:
+        # 真实 mapping（满足 batches.mapping_id NOT NULL）
+        mapping_row = Mapping(
+            name="mapping_for_failure_test",
+            file_path=str(staged_mapping),
+            entry_count=0,
+        )
+        db.add(mapping_row)
+        db.flush()
+        good_mapping_id = mapping_row.id
+
+        batch_row = Batch(
+            batch_no="nope.001", mapping_id=good_mapping_id, file_path="(pending)",
+            device_count=0, deembedded=False, process_type="S1P", uploaded_by="test",
+        )
+        db.add(batch_row)
+        task_row = UploadTask(batch_no="nope.001", status="pending", progress_pct=0)
+        db.add(task_row)
+        db.flush()
+        upload_task_id = task_row.id
+        db.commit()
+    finally:
+        db.close()
+
+    # 任务参数里传一个不存在的 mapping_id，让 process_batch_task 第 2 步抛 RuntimeError。
+    with pytest.raises(Exception):
+        process_batch_task.apply(
+            kwargs=dict(
+                upload_task_id=upload_task_id,
+                zip_path="/tmp/does-not-exist.zip",
+                batch_no="nope.001",
+                mapping_id=999999,  # 故意不存在
+                f_start_ghz=None,
+                f_end_ghz=None,
+                deembed_enabled=False,
+                process_type="S1P",
+            )
+        ).get()
+
+    db = SessionLocal()
+    try:
+        task = db.get(UploadTask, upload_task_id)
+        assert task is not None
+        assert task.status == "failed", f"upload_tasks 应落到 failed，实际 {task.status}"
+        assert task.error_msg, "失败应当带 error_msg"
+        assert task.finished_at is not None
+    finally:
+        db.close()
+
+
 def test_process_batch_full_pipeline(clean_db, staged_files):
     """完整跑：插 mapping → 插 pending batch + upload_task → 触发 task → 校验入库。"""
     staged_zip, staged_mapping = staged_files

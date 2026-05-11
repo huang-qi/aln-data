@@ -1,0 +1,80 @@
+"""Filter 树健壮性测试。
+
+覆盖 _build_node 深度上限、非法节点形状、空组等边界，
+确保恶意/手写 JSON 不会让 API 抛 500（RecursionError 或其他未捕获异常）。
+"""
+
+from __future__ import annotations
+
+import pytest
+from fastapi.testclient import TestClient
+
+from app.main import app
+
+
+@pytest.fixture(scope="module")
+def client() -> TestClient:
+    return TestClient(app)
+
+
+def _nested_or(depth: int) -> dict:
+    """构造 depth 层 OR 嵌套 + 一个叶。
+    depth=0 → 叶节点；depth=1 → {op:or, children:[叶]}；……
+    """
+    node: dict = {"field": "qs", "op": "gt", "value": 0}
+    for _ in range(depth):
+        node = {"op": "or", "children": [node]}
+    return node
+
+
+def test_filter_tree_within_depth_succeeds(client: TestClient) -> None:
+    """30 层嵌套（< 32 上限）应当被接受，不报 500 也不报 400。"""
+    payload = {"limit": 1, "filters": _nested_or(30)}
+    r = client.post("/api/query/devices", json=payload)
+    # 真正的数据不存在不要紧——这里只验证查询不被 reject、不爆 500
+    assert r.status_code == 200, r.text
+
+
+def test_filter_tree_exceeding_depth_returns_400(client: TestClient) -> None:
+    """100 层嵌套远超上限，应返回 400 而不是 500（RecursionError）。"""
+    payload = {"limit": 1, "filters": _nested_or(100)}
+    r = client.post("/api/query/devices", json=payload)
+    assert r.status_code == 400, r.text
+    assert "嵌套" in r.json()["detail"]
+
+
+def test_filter_node_must_be_dict(client: TestClient) -> None:
+    payload = {"limit": 1, "filters": {"op": "and", "children": ["not_a_dict"]}}
+    r = client.post("/api/query/devices", json=payload)
+    assert r.status_code == 400, r.text
+
+
+def test_filter_children_must_be_list(client: TestClient) -> None:
+    payload = {"limit": 1, "filters": {"op": "and", "children": "oops"}}
+    r = client.post("/api/query/devices", json=payload)
+    assert r.status_code == 400, r.text
+
+
+def test_filter_empty_group_accepted(client: TestClient) -> None:
+    """空 children 视为恒真，方便 UI 还没配条件时就能发请求。"""
+    payload = {"limit": 1, "filters": {"op": "and", "children": []}}
+    r = client.post("/api/query/devices", json=payload)
+    assert r.status_code == 200, r.text
+
+
+def test_mapping_name_rejects_path_chars(client: TestClient) -> None:
+    """对照表 name 直接拼进磁盘文件路径，必须挡掉路径字符。
+
+    历史风险：name=../../etc/foo 时 saved_path 会逃出 mappings_dir。
+    """
+    import io
+
+    bad_names = ["../etc/evil", "foo/bar", "foo\\bar", "..", "foo..bar"]
+    for bn in bad_names:
+        r = client.post(
+            "/api/mappings",
+            files={"file": ("x.xlsx", io.BytesIO(b"fake"))},
+            data={"name": bn},
+        )
+        assert r.status_code == 400, f"name={bn!r} 应被拒绝，实际 {r.status_code}: {r.text}"
+        assert "name" in r.json()["detail"]

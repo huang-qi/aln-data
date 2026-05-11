@@ -1362,7 +1362,9 @@ function buildLineTraces({ rows, xField, yField, zField, axisRef, zCategoryValue
     const zVals = zCategoryValues || distinctSortedValues(rows, zKey, { includeNull: true });
     let i = 0;
     for (const zv of zVals) {
-      const grp = prep(rows.filter((r) => r[zKey] === zv));
+      // zVals 含 NULL_KEY 时，对应行的 r[zKey] 是 null/undefined，不是字符串 '∅'。
+      // rowsForZ 替我们处理这个映射；用 === 直接比会让 NULL 桶静默掉光。
+      const grp = prep(rowsForZ(rows, zKey, zv));
       const c = PALETTE[i % PALETTE.length];
       traces.push({
         type: 'scatter',

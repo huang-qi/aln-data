@@ -26,8 +26,10 @@ def health(db: DbSession) -> dict:
 
     redis_status = "ok"
     try:
-        r = Redis.from_url(settings.REDIS_URL, decode_responses=True)
-        r.ping()
+        # 用 context manager 关闭连接 — /health 通常被监控按秒级轮询，
+        # 没有 close 会让每次调用都新开一个 pool，逐渐耗光 redis 连接数。
+        with Redis.from_url(settings.REDIS_URL, decode_responses=True) as r:
+            r.ping()
     except Exception as exc:
         redis_status = f"error: {exc!s}"
 

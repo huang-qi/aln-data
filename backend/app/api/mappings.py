@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 from typing import Annotated
 
@@ -19,6 +20,10 @@ from app.schemas.mapping import (
 )
 
 router = APIRouter(prefix="/mappings", tags=["mappings"])
+
+# name 直接拼进磁盘文件名，必须先 sanitize。允许中文、ASCII letters/digits、
+# 常见标点（连字、下划线、点）；禁掉路径分隔符 / 反斜杠 / .. 以及控制字符。
+_NAME_FORBIDDEN_RE = re.compile(r"[\x00-\x1f/\\]|\.\.")
 
 
 @router.get("", response_model=list[MappingListItem])
@@ -59,6 +64,11 @@ def upload_mapping(
     name = name.strip()
     if not name:
         raise HTTPException(status_code=400, detail="name 不能为空")
+    if _NAME_FORBIDDEN_RE.search(name):
+        raise HTTPException(
+            status_code=400,
+            detail="name 不能包含路径分隔符 / 反斜杠 / .. 或控制字符",
+        )
 
     existing = db.scalar(select(Mapping).where(Mapping.name == name))
     if existing is not None:
@@ -77,38 +87,44 @@ def upload_mapping(
                 break
             out.write(chunk)
 
+    # 任何后续步骤失败都得 rollback + 删除磁盘文件，避免留下孤儿 .xlsx。
     try:
-        entries = load_mapping(saved_path)
-    except Exception as exc:
+        try:
+            entries = load_mapping(saved_path)
+        except Exception as exc:
+            raise HTTPException(
+                status_code=400, detail=f"对照表解析失败: {exc!s}"
+            ) from exc
+
+        db.bulk_insert_mappings(
+            MappingEntry,
+            [
+                {
+                    "mapping_id": mapping_row.id,
+                    "mark": e.mark,
+                    "description": e.description,
+                    "eg": e.eg,
+                    "fl": e.fl,
+                    "ag": e.ag,
+                    "area_s11": e.area_s11,
+                    "area_s22": e.area_s22,
+                    "has_pf": e.has_pf,
+                    "raw_tokens": list(e.raw_tokens),
+                }
+                for e in entries.values()
+            ],
+        )
+        mapping_row.file_path = str(saved_path)
+        mapping_row.entry_count = len(entries)
+        db.commit()
+        db.refresh(mapping_row)
+    except Exception:
         db.rollback()
         try:
             saved_path.unlink()
         except Exception:
             pass
-        raise HTTPException(status_code=400, detail=f"对照表解析失败: {exc!s}") from exc
-
-    db.bulk_insert_mappings(
-        MappingEntry,
-        [
-            {
-                "mapping_id": mapping_row.id,
-                "mark": e.mark,
-                "description": e.description,
-                "eg": e.eg,
-                "fl": e.fl,
-                "ag": e.ag,
-                "area_s11": e.area_s11,
-                "area_s22": e.area_s22,
-                "has_pf": e.has_pf,
-                "raw_tokens": list(e.raw_tokens),
-            }
-            for e in entries.values()
-        ],
-    )
-    mapping_row.file_path = str(saved_path)
-    mapping_row.entry_count = len(entries)
-    db.commit()
-    db.refresh(mapping_row)
+        raise
 
     return MappingListItem(
         id=mapping_row.id,

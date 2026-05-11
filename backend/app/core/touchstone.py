@@ -101,20 +101,33 @@ def _modify_header(header: list[str], parameter: str) -> list[str]:
 
 
 def _extract_s11(data_lines: list[str]) -> list[str]:
+    # S2P 数据行格式：freq + S11_re/im + S21_re/im + S12_re/im + S22_re/im = 9 列。
+    # 列数 < 9 视为损坏行 → raise，避免与 _extract_s22 产生数量不对齐的 S11/S22
+    # 进而让下游 skrf de-embed 拿到对不上 frequency 轴的两个文件、静默腐败结果。
     out: list[str] = []
-    for line in data_lines:
+    for lineno, line in enumerate(data_lines, start=1):
         parts = line.strip().split()
-        if len(parts) >= 3:
-            out.append(f"{parts[0]} {parts[1]} {parts[2]}\n")
+        if not parts:
+            continue  # 空行（常见的末尾换行）跳过
+        if len(parts) < 9:
+            raise ValueError(
+                f"S2P 数据行 {lineno} 列数 {len(parts)} < 9，文件可能截断或损坏"
+            )
+        out.append(f"{parts[0]} {parts[1]} {parts[2]}\n")
     return out
 
 
 def _extract_s22(data_lines: list[str]) -> list[str]:
     out: list[str] = []
-    for line in data_lines:
+    for lineno, line in enumerate(data_lines, start=1):
         parts = line.strip().split()
-        if len(parts) >= 9:
-            out.append(f"{parts[0]} {parts[-2]} {parts[-1]}\n")
+        if not parts:
+            continue
+        if len(parts) < 9:
+            raise ValueError(
+                f"S2P 数据行 {lineno} 列数 {len(parts)} < 9，文件可能截断或损坏"
+            )
+        out.append(f"{parts[0]} {parts[-2]} {parts[-1]}\n")
     return out
 
 
