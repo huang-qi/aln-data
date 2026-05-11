@@ -20,14 +20,19 @@ export default function DeviceModal({ device, onClose }) {
     setLoading(true);
     setError(null);
     setData(null);
+    // cancelled 防止快速切 tab 时旧 fetch 后到、覆盖新 tab 数据：
+    // 比如 S11→BodeQ 时 S11 慢返回，会把 data.values 写进 state，
+    // 而 tab 已经是 'bodeq'，渲染 raw/smooth/fitted 全 undefined → 空图。
+    let cancelled = false;
     const fetcher =
       tab === 'bodeq'
         ? getDeviceBodeq(device.id)
         : getDeviceSparam(device.id, tab);
     fetcher
-      .then(setData)
-      .catch((e) => setError(e.message))
-      .finally(() => setLoading(false));
+      .then((d) => { if (!cancelled) setData(d); })
+      .catch((e) => { if (!cancelled) setError(e.message); })
+      .finally(() => { if (!cancelled) setLoading(false); });
+    return () => { cancelled = true; };
   }, [device?.id, tab]);
 
   if (!device) return null;

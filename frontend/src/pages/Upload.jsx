@@ -44,6 +44,10 @@ export default function Upload() {
       setSubmitError('仅支持 .zip 文件');
       return;
     }
+    if (f.size === 0) {
+      setSubmitError('文件为空（0 字节），无法上传');
+      return;
+    }
     setSubmitError(null);
     setFile(f);
   };

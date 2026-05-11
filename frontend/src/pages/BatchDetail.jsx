@@ -93,18 +93,24 @@ export default function BatchDetail() {
   };
 
   useEffect(() => {
+    let cancelled = false;
     getBatch(batchNo)
-      .then(setDetail)
-      .catch((e) => setError(e.message));
+      .then((d) => { if (!cancelled) setDetail(d); })
+      .catch((e) => { if (!cancelled) setError(e.message); });
+    return () => { cancelled = true; };
   }, [batchNo]);
 
   useEffect(() => {
+    // cancelled 防止快速改 filter 时慢请求后到、覆盖快请求的当前数据：
+    // 否则用户连续切 wafer 或翻页时可能看到上一次过滤的结果。
+    let cancelled = false;
     const params = { page, size };
     if (waferFilter) params.wafer = waferFilter;
     if (pfFilter) params.pf = pfFilter;
     listBatchDevices(batchNo, params)
-      .then(setDevices)
-      .catch((e) => setError(e.message));
+      .then((d) => { if (!cancelled) setDevices(d); })
+      .catch((e) => { if (!cancelled) setError(e.message); });
+    return () => { cancelled = true; };
   }, [batchNo, page, size, waferFilter, pfFilter]);
 
   const items = devices.items || [];
