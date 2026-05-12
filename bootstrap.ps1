@@ -1,4 +1,4 @@
-# 谐振器测试数据平台 - Windows 一键启动 (PowerShell 版)
+﻿# 谐振器测试数据平台 - Windows 一键启动 (PowerShell 版)
 # 用法（在仓库根目录打开 PowerShell）：
 #   .\bootstrap.ps1 up        # 启动全部 5 容器（默认）
 #   .\bootstrap.ps1 down      # 停止全部容器（保留数据）

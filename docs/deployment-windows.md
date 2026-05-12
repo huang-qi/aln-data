@@ -175,6 +175,26 @@ Invoke-WebRequest http://localhost:8080/api/health
 
 跳过 §1.4，执行 `Set-ExecutionPolicy -Scope CurrentUser RemoteSigned`。
 
+如果是**从 GitHub 下载 zip 解压**得到的代码，所有文件会带「来自网络」标记，即便策略放行了还会被拦。先解掉：
+
+```powershell
+Get-ChildItem -Recurse | Unblock-File
+```
+
+更推荐用 `git clone` 而不是下载 zip，clone 出来的文件没这个标记。
+
+### 4.1.5 `.ps1` 报「参数列表中缺少参量」/ 中文显示成 `鐩锛` `鎬?` 乱码
+
+Windows PowerShell 5.1（系统自带的 `powershell.exe`）默认按系统 ANSI 编码（中文系统是 GBK）读 `.ps1`，遇到 UTF-8 文件就乱码报错。本仓库的 `bootstrap.ps1` 已经带 UTF-8 BOM，正常不会触发。
+如果你拿到的版本没 BOM（比如老 zip），就地转一下：
+
+```powershell
+$txt = [IO.File]::ReadAllText("$PWD\bootstrap.ps1", [Text.UTF8Encoding]::new($false))
+[IO.File]::WriteAllText("$PWD\bootstrap.ps1", $txt, [Text.UTF8Encoding]::new($true))
+```
+
+或者直接装 PowerShell 7（`winget install Microsoft.PowerShell`），用 `pwsh` 代替 `powershell`，pwsh 默认就按 UTF-8 读。
+
 ### 4.2 启动后浏览器打不开 `localhost:8080`
 
 按顺序排查：
