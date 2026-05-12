@@ -21,29 +21,42 @@
 - **后端**：FastAPI 0.115 + SQLAlchemy 2.0 + PostgreSQL 15 + Celery 5 + Redis 7
 - **算法层**：numpy / scipy / scikit-rf（与客户原 CLI 脚本同栈，纯函数化重写）
 - **前端**：React 18 + Vite 5 + React Router 6 + Plotly.js + axios
-- **部署**：Podman Compose 5 容器（postgres / redis / api / worker / nginx）
+- **部署**：5 容器 compose 编排（postgres / redis / api / worker / nginx）；Linux 用 Podman，Windows 用 Docker Desktop
 - **包管理**：uv (Python) + npm (frontend)
 
 ---
 
-## 快速开始（5 分钟）
+## 快速开始
+
+> Windows 同事直接看 [`docs/deployment-windows.md`](docs/deployment-windows.md)。
+
+### Linux / macOS
 
 ```bash
 git clone <repo>
 cd aln-data
 cp .env.example .env
-# 至少改 POSTGRES_PASSWORD；其余默认即可
-./bootstrap.sh
-# 浏览器打开 http://localhost:18080
+# 至少改 POSTGRES_PASSWORD；DATA_ROOT 默认 /data3/aln，按需改
+cd frontend && npm install && npm run build && cd ..
+./bootstrap.sh up
+# 浏览器打开 http://localhost:8080
 ```
 
 `bootstrap.sh` 会替你做：检查 podman / 数据目录 / 启动 5 容器 / 跑 alembic 迁移 / 验证 `/api/health`。
 
-如果前端 `frontend/dist/` 还不存在，脚本会提示你先：
+### Windows
 
-```bash
-cd frontend && npm install && npm run build
+```powershell
+git clone <repo>
+cd aln-data
+Copy-Item .env.example .env
+# 用 notepad .env 改 POSTGRES_PASSWORD + DATA_ROOT（推荐 D:/aln-data 这种绝对路径）
+cd frontend; npm install; npm run build; cd ..
+.\bootstrap.ps1 up
+# 浏览器打开 http://localhost:8080
 ```
+
+`bootstrap.ps1` 复刻同样的流程，但用 Docker Desktop 而不是 podman。详细步骤与排错见 [Windows 部署指南](docs/deployment-windows.md)。
 
 ---
 
@@ -59,14 +72,16 @@ aln-data/
 ├── frontend/             # Vite + React 前端
 │   ├── src/              # api / components / pages / router / hooks
 │   └── vite.config.js
-├── deploy/               # podman compose 编排 + nginx 配置
+├── deploy/               # compose 编排 + nginx 配置（podman/docker 通用）
 ├── docs/                 # 8 份设计文档（见下）
-├── bootstrap.sh          # 一键启动 / 停止 / 重置 / 查状态
+├── bootstrap.sh          # Linux/macOS：一键启动 / 停止 / 重置 / 查状态
+├── bootstrap.ps1         # Windows PowerShell 等价物
 ├── .env.example          # 环境变量模板
 └── 客户提供的材料/        # 客户原始物料（不进 git）
 ```
 
-数据目录在仓库外：`/data3/aln/{pgdata,redis,uploads,files,mappings,exports,logs}`。
+数据目录路径由 `.env` 中的 `DATA_ROOT` 决定：Linux 默认 `/data3/aln/`，Windows 推荐 `D:/aln-data/`。
+落盘结构都是 `{pgdata,redis,uploads,files,mappings,exports,logs}/`。
 
 ---
 
@@ -79,7 +94,8 @@ aln-data/
 | [API 契约](docs/api.md) | 24 个端点定义、请求/响应 schema |
 | [DB schema](docs/database-schema.md) | 5 张表结构 + 索引 |
 | [算法移植规格](docs/algorithm-port.md) | 客户脚本 → 后端纯函数的逐函数对照 |
-| [部署](docs/deployment.md) | 首次部署详解 |
+| [部署 (Linux)](docs/deployment.md) | 首次部署详解（podman 路线） |
+| [部署 (Windows)](docs/deployment-windows.md) | Docker Desktop + PowerShell 路线 |
 | [运维](docs/operations.md) | 重启 / 备份 / 日常排错 cookbook |
 | [前端评估](docs/frontend-evaluation.md) | 外部原型评估 + 改造记录 |
 

@@ -71,10 +71,19 @@ load_data_root() {
         v="$(strip_quotes "${v}")"
         if [[ -n "${v}" ]]; then
             DATA_ROOT="${v}"
-            return
+        else
+            DATA_ROOT="${DATA_ROOT_DEFAULT}"
         fi
+    else
+        DATA_ROOT="${DATA_ROOT_DEFAULT}"
     fi
-    DATA_ROOT="${DATA_ROOT_DEFAULT}"
+    # 相对路径自动展开为相对项目根的绝对路径——避免 docker compose 把它
+    # 解析到 deploy/ 子目录下。展开后导出给 compose 子进程，覆盖 .env 里的相对值。
+    if [[ "${DATA_ROOT}" != /* ]]; then
+        DATA_ROOT="${SCRIPT_DIR}/${DATA_ROOT#./}"
+        log_info "DATA_ROOT 是相对路径，已展开为 ${DATA_ROOT}"
+    fi
+    export DATA_ROOT
 }
 
 # reset 前的安全闸：拒掉根 / 短路径 / 相对路径，避免 rm -rf 误操作根文件系统。

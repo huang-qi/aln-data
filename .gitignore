@@ -29,6 +29,12 @@ backend/exports/
 backend/uploads/
 *.log
 
+# 项目内数据目录（Windows / 跨平台部署时 DATA_ROOT 落在仓库内 ./data）
+/data/
+
+# Claude Code 本地配置
+.claude/
+
 # IDE
 .idea/
 .vscode/

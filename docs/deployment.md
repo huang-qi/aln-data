@@ -1,9 +1,12 @@
-# 部署指南
+# 部署指南（Linux）
 
-**版本**：v0.1
+**版本**：v0.2
 **部署方式**：Podman Compose
 **目标机**：fineserver（Rocky Linux 8.10，Podman 4.9.4）
 
+> Windows 同事请走 [`deployment-windows.md`](./deployment-windows.md)（Docker Desktop + PowerShell）。
+> 本文里所有 `podman compose ...` 命令在 Docker Engine 20.10+ 上把 `podman` 换成 `docker` 即可，编排文件兼容。
+>
 > **路径约定**：下文所有 `$REPO` 指本仓库 clone 后的根目录。先 `export REPO=/your/path/to/aln-data` 一次，命令即可直接复制执行。
 > `$DATA_ROOT` 同理（即 `.env` 中的 `DATA_ROOT`，默认 `/data3/aln`）。
 
